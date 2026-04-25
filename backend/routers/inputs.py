@@ -1,0 +1,258 @@
+"""
+/api/inputs/* — reads from the 9 module_* tables (BR-001 upstream input source).
+
+Used by the Input Validation Dashboard. Each module table represents one of the
+8 BR-001 input categories for a given RFP. "Confirm Compilation" creates a new
+bid + 8 sections progressively over ~20 seconds (simulated compilation).
+"""
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text, select, func
+from database import get_db, AsyncSessionLocal
+from models.bid import Bid, BidSection, BidAuditLog
+from auth import get_user_role, require_manager
+from typing import List, Dict, Any
+from datetime import datetime, timezone, date, timedelta
+from decimal import Decimal
+from uuid import UUID
+
+router = APIRouter()
+
+# Maps each BR-001 input category to its source module + the column the data lives in.
+INPUT_CATEGORIES = [
+    ("RFP/RFQ document",     "rfp_module",         "title"),
+    ("Effort estimation",    "solution_module",    "tasks"),
+    ("Delivery schedule",    "solution_module",    "task_dependencies"),
+    ("Quality framework",    "quality_module",     "metrics"),
+    ("Deliverable register", "deliverable_module", "deliverables"),
+    ("Risks & dependencies", "risk_module",        "risks"),
+    ("Pricing inputs",       "pricing_module",     "rate_card"),
+    ("Acceptance criteria",  "acceptance_module",  "acceptance_criteria"),
+]
+
+SECTIONS_FROM_MODULES = [
+    ("effort",       "Effort Estimation",    "solution_module",    "v3.2"),
+    ("schedule",     "Delivery Schedule",    "solution_module",    "v2.1"),
+    ("pricing",      "Task-wise Pricing",    "pricing_module",     "v1.4"),
+    ("quality",      "Quality Framework",    "quality_module",     "v1.0"),
+    ("deliverables", "Deliverable Register", "deliverable_module", "v2.0"),
+    ("risks",        "Risk Register",        "risk_module",        "v1.7"),
+    ("dependencies", "Dependency Map",       "dependency_module",  "v1.7"),
+    ("acceptance",   "Acceptance Criteria",  "acceptance_module",  "v1.2"),
+]
+
+
+@router.get("/")
+async def list_input_status(db: AsyncSession = Depends(get_db)) -> List[Dict[str, Any]]:
+    """For every RFP, report status of all 8 input categories."""
+    rfps = (await db.execute(text(
+        "SELECT rfp_id, client_name, title FROM rfp_module ORDER BY rfp_id"
+    ))).all()
+
+    out = []
+    for rfp in rfps:
+        rfp_id = rfp[0]
+        # Has this RFP already been compiled into a bid?
+        existing_bid = (await db.execute(
+            select(Bid.bid_reference, Bid.stage).where(Bid.rfp_id == rfp_id)
+        )).first()
+
+        inputs = []
+        for category, table, col in INPUT_CATEGORIES:
+            row = (await db.execute(text(
+                f'SELECT created_at, "{col}" FROM {table} '
+                f"WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1"
+            ), {"rfp_id": rfp_id})).first()
+            if not row:
+                inputs.append({"module": table, "category": category, "status": "missing", "ts": None})
+            elif row[1] is None:
+                inputs.append({"module": table, "category": category, "status": "malformed", "ts": row[0].isoformat() if row[0] else None})
+            else:
+                inputs.append({"module": table, "category": category, "status": "received", "ts": row[0].isoformat() if row[0] else None})
+
+        out.append({
+            "rfp_id":            rfp_id,
+            "client":            rfp[1],
+            "title":             rfp[2],
+            "inputs":            inputs,
+            "compiled_bid_ref":  existing_bid[0] if existing_bid else None,
+            "compiled_bid_stage": existing_bid[1] if existing_bid else None,
+        })
+    return out
+
+
+@router.post("/{rfp_id}/request-missing/{category}")
+async def request_missing(rfp_id: str, category: str,
+                          role: str = Depends(get_user_role),
+                          db: AsyncSession = Depends(get_db)):
+    require_manager(role)
+    db.add(BidAuditLog(
+        action_type="Request Missing Data",
+        role="Manager",
+        performed_by="Arjun Kapoor",
+        detail=f"Requested missing input '{category}' for {rfp_id}",
+        br_reference="BR-001",
+        bid_reference=rfp_id,
+    ))
+    await db.commit()
+    return {"status": "request sent", "rfp_id": rfp_id, "category": category}
+
+
+async def _compile_section_progressively(bid_id: UUID, bid_ref: str, rfp_id: str | None,
+                                         key: str, name: str, source: str, ver: str, delay_seconds: float):
+    """Background task — wait, then materialise one section.
+    For 'effort' and 'schedule', invoke the real compile engine (AC-02 / AC-03).
+    """
+    from compile_engine import compute_effort, compute_schedule
+
+    await asyncio.sleep(delay_seconds)
+    async with AsyncSessionLocal() as db:
+        compiled_data = None
+        flag_count = 0
+        flags_list: list = []
+        confidence = Decimal("0.78")
+
+        if rfp_id:
+            if key == "effort":
+                compiled_data = await compute_effort(db, rfp_id)
+                if compiled_data:
+                    flags_list = compiled_data.get("flags", [])
+                    flag_count = len(flags_list)
+                    avg = compiled_data.get("summary", {}).get("avg_confidence", 0.78)
+                    confidence = Decimal(str(avg))
+            elif key == "schedule":
+                start = date.today() + timedelta(days=14)
+                compiled_data = await compute_schedule(db, rfp_id, start)
+                if compiled_data:
+                    flags_list = compiled_data.get("conflicts", [])
+                    flag_count = len(flags_list)
+
+        db.add(BidSection(
+            bid_id=bid_id, section_key=key, section_name=name,
+            status="pending", source_module=source, input_version=ver,
+            compiled_data=compiled_data,
+            confidence_score=confidence,
+            flag_count=flag_count,
+            flags=flags_list,
+        ))
+        db.add(BidAuditLog(
+            bid_id=bid_id, bid_reference=bid_ref,
+            action_type="Section Compiled", role="System", performed_by="Bid Engine",
+            section_key=key,
+            detail=(f"Compiled section '{name}' from {source} (v{ver}) — "
+                    f"{flag_count} flag(s)" if compiled_data else
+                    f"Compiled section '{name}' from {source} (v{ver}) — no upstream data, used template"),
+            br_reference="BR-002",
+        ))
+        await db.commit()
+
+
+async def _finalise_compile(bid_id: UUID, bid_ref: str, total_delay: float):
+    """Background task — wait until all sections are compiled, then mark compile_finished_at."""
+    await asyncio.sleep(total_delay + 1)
+    async with AsyncSessionLocal() as db:
+        bid = await db.get(Bid, bid_id)
+        if bid:
+            bid.compile_finished_at = datetime.now(timezone.utc)
+            bid.last_action_text    = "Compilation complete"
+            bid.last_action_by      = "Bid Engine"
+            bid.last_action_at      = datetime.now(timezone.utc)
+            db.add(BidAuditLog(
+                bid_id=bid_id, bid_reference=bid_ref,
+                action_type="Compiled", role="System", performed_by="Bid Engine",
+                detail=f"All 8 sections compiled — ready for Manager to route to Director",
+                br_reference="BR-002",
+            ))
+            await db.commit()
+
+
+@router.post("/{rfp_id}/confirm-compilation")
+async def confirm_compilation(rfp_id: str,
+                              role: str = Depends(get_user_role),
+                              db: AsyncSession = Depends(get_db)):
+    require_manager(role)
+    """
+    Creates the bid immediately, then schedules background tasks that materialise
+    the 8 sections one at a time over ~24 seconds (3s apart). The Compilation page
+    polls /compilation-telemetry to show live progress.
+    """
+    existing = (await db.execute(select(Bid).where(Bid.rfp_id == rfp_id))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Bid {existing.bid_reference} already compiled for {rfp_id}")
+
+    rfp = (await db.execute(text("SELECT title, client_name, deadline FROM rfp_module WHERE rfp_id = :rfp_id"),
+                            {"rfp_id": rfp_id})).first()
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    pricing = (await db.execute(text(
+        "SELECT total_estimated_cost, margin_percentage FROM pricing_module WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1"
+    ), {"rfp_id": rfp_id})).first()
+    cost = Decimal(str(pricing[0])) if pricing and pricing[0] else Decimal("0")
+    margin = Decimal(str(pricing[1])) if pricing and pricing[1] else Decimal("20")
+    bid_value = (cost / (1 - margin / 100)) if margin < 100 else cost
+
+    last = (await db.execute(text(
+        "SELECT bid_reference FROM bids WHERE bid_reference LIKE 'BID-2026-%' ORDER BY bid_reference DESC LIMIT 1"
+    ))).first()
+    next_n = int(last[0].split("-")[-1]) + 1 if last else 1
+    new_ref = f"BID-2026-{next_n:03d}"
+
+    deadline = rfp[2] or (date.today() + timedelta(days=30))
+
+    bid = Bid(
+        bid_reference=new_ref,
+        rfp_id=rfp_id,
+        title=rfp[0] or "Untitled RFP",
+        client_name=rfp[1],
+        stage="compiling",
+        assigned_manager="Arjun Kapoor",
+        assigned_director="Priya Menon",
+        compiled_value=bid_value,
+        currency="GBP",
+        compiled_margin_pct=margin,
+        submission_deadline=deadline,
+        sections_total=8,
+        sections_complete=0,
+        win_probability=Decimal("0.55"),
+        tags=["Auto-compiled", rfp[1] or "Demo"],
+        compile_started_at=datetime.now(timezone.utc),
+        last_action_text="Compilation started from upstream modules",
+        last_action_by="Arjun Kapoor",
+        last_action_at=datetime.now(timezone.utc),
+    )
+    db.add(bid)
+    await db.flush()
+    bid_id = bid.bid_id
+
+    db.add(BidAuditLog(
+        bid_id=bid_id, bid_reference=new_ref, action_type="Input Confirmed",
+        role="Manager", performed_by="Arjun Kapoor",
+        detail=f"Manager confirmed all 8 inputs for {rfp_id} — compilation started",
+        br_reference="BR-001",
+    ))
+    db.add(BidAuditLog(
+        bid_id=bid_id, bid_reference=new_ref, action_type="Compilation Started",
+        role="System", performed_by="Bid Engine",
+        detail=f"Compiling {new_ref} from 8 upstream module rows",
+        br_reference="BR-002",
+    ))
+
+    await db.commit()
+
+    # Schedule the 8 sections to compile one every 3 seconds.
+    SECTION_INTERVAL_S = 3.0
+    for i, (key, name, source, ver) in enumerate(SECTIONS_FROM_MODULES):
+        asyncio.create_task(_compile_section_progressively(
+            bid_id, new_ref, rfp_id, key, name, source, ver, delay_seconds=(i + 1) * SECTION_INTERVAL_S
+        ))
+    asyncio.create_task(_finalise_compile(bid_id, new_ref, total_delay=8 * SECTION_INTERVAL_S))
+
+    return {
+        "status": "compilation triggered",
+        "rfp_id": rfp_id,
+        "bid_reference": new_ref,
+        "stage": "compiling",
+        "estimated_seconds": int(8 * SECTION_INTERVAL_S),
+    }

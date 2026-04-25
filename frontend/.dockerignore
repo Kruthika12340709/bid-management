@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.vite/
+*.log
+dev.log
+.git/
+.gitignore
+.env
+.env.local
+.vscode/
+.idea/
+README.md
