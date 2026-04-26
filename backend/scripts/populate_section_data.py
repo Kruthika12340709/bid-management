@@ -5,8 +5,10 @@ so the BidDetail page renders content from the DB instead of hardcoded mock JSX.
 Idempotent: only updates rows where compiled_data IS NULL.
 """
 import asyncio
-import json
 import sys
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

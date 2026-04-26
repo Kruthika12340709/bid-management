@@ -1,14 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Icon } from '../components/ui/Icon';
 import { BidRow } from './Dashboard';
 import { useBids } from '../hooks/useApiData';
 import { downloadCSV } from '../utils/csv';
+import Pagination from '../components/ui/Pagination';
+
+const PAGE_SIZE = 10;
 
 export default function BidsList({ user, onOpenBid, onTabChange }) {
   const { bids, error } = useBids();
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [page, setPage]     = useState(1);
   const isDirector = user.id === 'director';
+
+  useEffect(() => setPage(1), [filter, search]);
 
   if (error) return <div style={{ padding: 40, color: '#DC2626' }}>API error: {String(error)}</div>;
   if (!bids) return <div style={{ padding: 40, color: '#94A3B8' }}>Loading bids…</div>;
@@ -33,6 +39,8 @@ export default function BidsList({ user, onOpenBid, onTabChange }) {
     const s = search.toLowerCase();
     visible = visible.filter(b => b.title.toLowerCase().includes(s) || b.client.toLowerCase().includes(s) || b.id.toLowerCase().includes(s));
   }
+
+  const paginated = visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   return (
     <div>
@@ -79,12 +87,13 @@ export default function BidsList({ user, onOpenBid, onTabChange }) {
             <tr><th>Bid / ID</th><th>Client</th><th>RFP Reference</th><th>Stage</th><th>Value</th><th>Sections</th><th>Deadline</th><th>Flags</th><th>Owner</th><th></th></tr>
           </thead>
           <tbody>
-            {visible.map(b => <BidRow key={b.id} bid={b} onClick={() => onOpenBid(b)} />)}
+            {paginated.map(b => <BidRow key={b.id} bid={b} onClick={() => onOpenBid(b)} />)}
             {visible.length === 0 && (
               <tr><td colSpan="10" style={{ padding: 40, textAlign: 'center', color: '#94A3B8', fontSize: 13 }}>No bids match the current filter.</td></tr>
             )}
           </tbody>
         </table>
+        <Pagination total={visible.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
       </div>
     </div>
   );

@@ -1,6 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Icon } from '../components/ui/Icon';
 import { useAuditLog } from '../hooks/useApiData';
+import Pagination from '../components/ui/Pagination';
+
+const PAGE_SIZE = 15;
 
 const USER_LABEL = {
   director: 'Priya Menon',
@@ -23,6 +26,7 @@ export default function AuditLog() {
   const [userF, setUserF]     = useState('all');
   const [from, setFrom]       = useState('');
   const [to, setTo]           = useState('');
+  const [page, setPage]       = useState(1);
 
   const { entries, error } = useAuditLog();
 
@@ -45,6 +49,9 @@ export default function AuditLog() {
       return true;
     });
   }, [entries, search, actionK, userF, from, to]);
+
+  useEffect(() => setPage(1), [visible.length]);
+  const paginated = visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   function exportCSV() {
     const header = ['Timestamp (UTC)', 'Bid Ref', 'Section', 'Action', 'Original', 'Revised', 'User', 'Role', 'Details'];
@@ -117,6 +124,7 @@ export default function AuditLog() {
         <div className="card-header">
           <div className="card-title">
             {entries === null ? 'Loading…' : `${visible.length} entries · append-only`}
+
             {error && <span style={{ color: '#DC2626', fontWeight: 500, marginLeft: 8, fontSize: 11 }}>API error: {String(error)}</span>}
           </div>
           <span className="badge badge-neutral" style={{ fontSize: 10 }}>Immutable · log entries cannot be edited or deleted</span>
@@ -131,7 +139,7 @@ export default function AuditLog() {
             </tr>
           </thead>
           <tbody>
-            {visible.map((e, i) => (
+            {paginated.map((e, i) => (
               <tr key={i}>
                 <td style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#475569', whiteSpace: 'nowrap' }}>{e.ts}</td>
                 <td><strong style={{ fontSize: 11.5, color: '#5929d0', fontFamily: 'ui-monospace, monospace' }}>{e.bid}</strong></td>
@@ -153,6 +161,7 @@ export default function AuditLog() {
             )}
           </tbody>
         </table>
+        <Pagination total={visible.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
       </div>
     </div>
   );

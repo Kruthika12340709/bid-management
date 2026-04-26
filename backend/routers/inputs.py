@@ -19,17 +19,180 @@ from uuid import UUID
 
 router = APIRouter()
 
-# Maps each BR-001 input category to its source module + the column the data lives in.
+# (category, table, select_cols)  — first col after created_at is the primary data field
 INPUT_CATEGORIES = [
-    ("RFP/RFQ document",     "rfp_module",         "title"),
-    ("Effort estimation",    "solution_module",    "tasks"),
-    ("Delivery schedule",    "solution_module",    "task_dependencies"),
-    ("Quality framework",    "quality_module",     "metrics"),
-    ("Deliverable register", "deliverable_module", "deliverables"),
-    ("Risks & dependencies", "risk_module",        "risks"),
-    ("Pricing inputs",       "pricing_module",     "rate_card"),
-    ("Acceptance criteria",  "acceptance_module",  "acceptance_criteria"),
+    ("RFP/RFQ document",     "rfp_module",         "created_at, title, client_name, deadline, duration_days"),
+    ("Effort estimation",    "solution_module",    "created_at, tasks"),
+    ("Delivery schedule",    "solution_module",    "created_at, task_dependencies"),
+    ("Quality framework",    "quality_module",     "created_at, metrics"),
+    ("Deliverable register", "deliverable_module", "created_at, deliverables"),
+    ("Risks & dependencies", "risk_module",        "created_at, risks"),
+    ("Pricing inputs",       "pricing_module",     "created_at, rate_card, margin_percentage, total_estimated_cost"),
+    ("Acceptance criteria",  "acceptance_module",  "created_at, acceptance_criteria"),
 ]
+
+
+def _parse(val):
+    import json as _json
+    if isinstance(val, str):
+        try:
+            return _json.loads(val)
+        except Exception:
+            return None
+    return val
+
+
+def _validate_input(category: str, table: str, row) -> list:
+    """Content-validate a fetched module row. Returns list of human-readable issues."""
+    issues = []
+
+    if table == "rfp_module":
+        title, client_name, deadline, duration_days = row[1], row[2], row[3], row[4]
+        if not title or not str(title).strip():
+            issues.append("title is empty")
+        if not client_name or not str(client_name).strip():
+            issues.append("client_name is empty")
+        if not deadline:
+            issues.append("deadline is missing")
+        if not duration_days or int(duration_days) <= 0:
+            issues.append("duration_days must be a positive integer")
+
+    elif table == "solution_module" and category == "Effort estimation":
+        tasks = _parse(row[1])
+        if not tasks or not isinstance(tasks, list) or len(tasks) == 0:
+            issues.append("tasks array is empty or missing")
+        else:
+            for i, t in enumerate(tasks):
+                if not t.get("id"):
+                    issues.append(f"task[{i}] missing 'id'")
+                if not t.get("name"):
+                    issues.append(f"task[{i}] missing 'name'")
+                hours = t.get("estimated_hours", 0)
+                if not hours or float(hours) <= 0:
+                    issues.append(f"task[{i}] estimated_hours must be > 0")
+                conf = t.get("confidence")
+                if conf is None or not (0 <= float(conf) <= 1):
+                    issues.append(f"task[{i}] confidence must be 0–1")
+
+    elif table == "solution_module" and category == "Delivery schedule":
+        deps = _parse(row[1])
+        if deps is None:
+            issues.append("task_dependencies field is null")
+        elif not isinstance(deps, list):
+            issues.append("task_dependencies must be an array")
+
+    elif table == "quality_module":
+        metrics = _parse(row[1])
+        if not metrics or not isinstance(metrics, list) or len(metrics) == 0:
+            issues.append("metrics array is empty or missing")
+        else:
+            for i, m in enumerate(metrics):
+                for field in ("metric", "target", "measurement"):
+                    if not m.get(field):
+                        issues.append(f"metric[{i}] missing '{field}'")
+
+    elif table == "deliverable_module":
+        deliverables = _parse(row[1])
+        if not deliverables or not isinstance(deliverables, list) or len(deliverables) == 0:
+            issues.append("deliverables array is empty or missing")
+        else:
+            for i, d in enumerate(deliverables):
+                for field in ("name", "description", "owner"):
+                    if not d.get(field):
+                        issues.append(f"deliverable[{i}] missing '{field}'")
+
+    elif table == "risk_module":
+        risks = _parse(row[1])
+        if not risks or not isinstance(risks, list) or len(risks) == 0:
+            issues.append("risks array is empty or missing")
+        else:
+            for i, r in enumerate(risks):
+                for field in ("risk", "probability", "impact", "mitigation"):
+                    if not r.get(field):
+                        issues.append(f"risk[{i}] missing '{field}'")
+
+    elif table == "pricing_module":
+        rate_card = _parse(row[1])
+        margin = row[2]
+        cost = row[3]
+        if not rate_card or not isinstance(rate_card, dict) or len(rate_card) == 0:
+            issues.append("rate_card is empty or missing")
+        if margin is None:
+            issues.append("margin_percentage is missing")
+        elif not (0 < float(margin) < 100):
+            issues.append(f"margin_percentage ({margin}) must be between 0 and 100")
+        if not cost or float(cost) <= 0:
+            issues.append("total_estimated_cost must be > 0")
+
+    elif table == "acceptance_module":
+        criteria = _parse(row[1])
+        if not criteria or not isinstance(criteria, list) or len(criteria) == 0:
+            issues.append("acceptance_criteria array is empty or missing")
+
+    return issues
+
+
+LOW_CONFIDENCE_THRESHOLD = 0.75
+
+
+def _compute_confidence(category: str, table: str, row) -> float:
+    if table == "rfp_module":
+        fields = [row[1], row[2], row[3], row[4]]
+        filled = sum(1 for f in fields if f is not None and str(f).strip())
+        return round(filled / len(fields), 2)
+
+    elif table == "solution_module" and category == "Effort estimation":
+        tasks = _parse(row[1]) or []
+        if not tasks:
+            return 0.0
+        confs = [float(t.get("confidence", 0.5)) for t in tasks if isinstance(t, dict)]
+        return round(sum(confs) / len(confs), 2) if confs else 0.5
+
+    elif table == "solution_module":
+        deps = _parse(row[1])
+        if deps is None:
+            return 0.0
+        return 0.9 if isinstance(deps, list) else 0.5
+
+    elif table == "quality_module":
+        metrics = _parse(row[1]) or []
+        if not metrics:
+            return 0.0
+        complete = sum(1 for m in metrics if all(m.get(f) for f in ("metric", "target", "measurement")))
+        return round(complete / len(metrics), 2)
+
+    elif table == "deliverable_module":
+        items = _parse(row[1]) or []
+        if not items:
+            return 0.0
+        complete = sum(1 for d in items if all(d.get(f) for f in ("name", "description", "owner")))
+        return round(complete / len(items), 2)
+
+    elif table == "risk_module":
+        risks = _parse(row[1]) or []
+        if not risks:
+            return 0.0
+        complete = sum(1 for r in risks if all(r.get(f) for f in ("risk", "probability", "impact", "mitigation")))
+        return round(complete / len(risks), 2)
+
+    elif table == "pricing_module":
+        score = 0.0
+        rate_card = _parse(row[1])
+        margin, cost = row[2], row[3]
+        if rate_card and isinstance(rate_card, dict) and len(rate_card) > 0:
+            score += 0.4
+        if margin is not None and 0 < float(margin) < 100:
+            score += 0.3
+        if cost and float(cost) > 0:
+            score += 0.3
+        return round(score, 2)
+
+    elif table == "acceptance_module":
+        criteria = _parse(row[1]) or []
+        return 1.0 if criteria and isinstance(criteria, list) and len(criteria) > 0 else 0.0
+
+    return 1.0
+
 
 SECTIONS_FROM_MODULES = [
     ("effort",       "Effort Estimation",    "solution_module",    "v3.2"),
@@ -45,7 +208,7 @@ SECTIONS_FROM_MODULES = [
 
 @router.get("/")
 async def list_input_status(db: AsyncSession = Depends(get_db)) -> List[Dict[str, Any]]:
-    """For every RFP, report status of all 8 input categories."""
+    """For every RFP, report status, confidence, and manager decisions for all 8 input categories."""
     rfps = (await db.execute(text(
         "SELECT rfp_id, client_name, title FROM rfp_module ORDER BY rfp_id"
     ))).all()
@@ -53,33 +216,88 @@ async def list_input_status(db: AsyncSession = Depends(get_db)) -> List[Dict[str
     out = []
     for rfp in rfps:
         rfp_id = rfp[0]
-        # Has this RFP already been compiled into a bid?
+
         existing_bid = (await db.execute(
             select(Bid.bid_reference, Bid.stage).where(Bid.rfp_id == rfp_id)
         )).first()
 
+        # Latest manager decision per category
+        decision_rows = (await db.execute(text("""
+            SELECT DISTINCT ON (section_key) section_key, detail, performed_by, created_at
+            FROM bid_audit_log
+            WHERE bid_reference = :rfp_id AND action_type = 'Input Decision'
+            ORDER BY section_key, created_at DESC
+        """), {"rfp_id": rfp_id})).all()
+        decisions = {r[0]: {"action": r[1], "by": r[2], "at": r[3].isoformat() if r[3] else None}
+                     for r in decision_rows}
+
         inputs = []
-        for category, table, col in INPUT_CATEGORIES:
+        for category, table, select_cols in INPUT_CATEGORIES:
             row = (await db.execute(text(
-                f'SELECT created_at, "{col}" FROM {table} '
+                f"SELECT {select_cols} FROM {table} "
                 f"WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1"
             ), {"rfp_id": rfp_id})).first()
+
+            decision = decisions.get(category)
+
             if not row:
-                inputs.append({"module": table, "category": category, "status": "missing", "ts": None})
-            elif row[1] is None:
-                inputs.append({"module": table, "category": category, "status": "malformed", "ts": row[0].isoformat() if row[0] else None})
+                inputs.append({
+                    "module": table, "category": category,
+                    "status": "missing", "confidence": 0.0,
+                    "ts": None, "issues": [], "decision": decision,
+                })
             else:
-                inputs.append({"module": table, "category": category, "status": "received", "ts": row[0].isoformat() if row[0] else None})
+                issues     = _validate_input(category, table, row)
+                confidence = _compute_confidence(category, table, row)
+                if issues:
+                    status = "invalid"
+                elif confidence < LOW_CONFIDENCE_THRESHOLD:
+                    status = "low_confidence"
+                else:
+                    status = "valid"
+                inputs.append({
+                    "module":     table,
+                    "category":   category,
+                    "status":     status,
+                    "confidence": confidence,
+                    "ts":         row[0].isoformat() if row[0] else None,
+                    "issues":     issues,
+                    "decision":   decision,
+                })
 
         out.append({
-            "rfp_id":            rfp_id,
-            "client":            rfp[1],
-            "title":             rfp[2],
-            "inputs":            inputs,
-            "compiled_bid_ref":  existing_bid[0] if existing_bid else None,
+            "rfp_id":             rfp_id,
+            "client":             rfp[1],
+            "title":              rfp[2],
+            "inputs":             inputs,
+            "compiled_bid_ref":   existing_bid[0] if existing_bid else None,
             "compiled_bid_stage": existing_bid[1] if existing_bid else None,
         })
     return out
+
+
+@router.post("/{rfp_id}/decisions")
+async def record_decision(rfp_id: str, payload: dict,
+                          role: str = Depends(get_user_role),
+                          db: AsyncSession = Depends(get_db)):
+    """Record a manager decision: proceed | request | descope."""
+    require_manager(role)
+    action   = payload.get("action")
+    category = payload.get("category")
+    actor    = payload.get("performed_by", "Arjun Kapoor")
+    if action not in ("proceed", "request", "descope"):
+        raise HTTPException(status_code=400, detail="action must be proceed | request | descope")
+    db.add(BidAuditLog(
+        action_type="Input Decision",
+        role="Manager",
+        performed_by=actor,
+        bid_reference=rfp_id,
+        section_key=category,
+        detail=action,
+        br_reference="BR-001",
+    ))
+    await db.commit()
+    return {"rfp_id": rfp_id, "category": category, "action": action}
 
 
 @router.post("/{rfp_id}/request-missing/{category}")

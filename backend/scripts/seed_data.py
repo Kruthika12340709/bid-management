@@ -4,8 +4,10 @@ Idempotent: deletes existing rows in the 5 bid_* tables before inserting.
 The 9 module_* tables are NOT touched.
 """
 import asyncio
-import json
 import sys
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+import json
 from datetime import datetime, date, timezone
 
 

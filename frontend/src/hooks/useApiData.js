@@ -8,7 +8,11 @@ function poll(fetcher, deps, pollMs, setData, setError) {
   setError(null);
   const tick = () => fetcher()
     .then(d => { if (alive) setData(d); })
-    .catch(e => { if (alive) setError(e); });
+    .catch(e => {
+      if (!alive) return;
+      if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return;
+      setError(e);
+    });
   tick();
   if (pollMs > 0) timer = setInterval(tick, pollMs);
   return () => { alive = false; if (timer) clearInterval(timer); };
@@ -73,7 +77,7 @@ export function useAuditLog(params = {}, pollMs = 0) {
   return { entries, error };
 }
 
-export function useInputs(pollMs = 10000) {
+export function useInputs(pollMs = 30000) {
   const [data, setData]   = useState(null);
   const [error, setError] = useState(null);
   const [reload, setReload] = useState(0);

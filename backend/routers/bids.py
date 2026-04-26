@@ -18,10 +18,18 @@ class ActorPayload(BaseModel):
     note: str | None = None
 
 
-@router.get("/", response_model=List[BidSummary])
+@router.get("/")
 async def list_bids(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Bid).order_by(Bid.submission_deadline))
-    return result.scalars().all()
+    from sqlalchemy import text as sa_text
+    rows = (await db.execute(sa_text("""
+        SELECT b.*,
+               COALESCE(SUM(s.flag_count), 0)::int AS section_flag_count
+        FROM bids b
+        LEFT JOIN bid_sections s ON s.bid_id = b.bid_id
+        GROUP BY b.bid_id
+        ORDER BY b.submission_deadline
+    """))).mappings().all()
+    return [dict(r) for r in rows]
 
 
 @router.get("/{bid_ref}", response_model=BidOut)
@@ -171,7 +179,7 @@ async def compilation_telemetry(bid_ref: str, db: AsyncSession = Depends(get_db)
         "sources_merged":  len(sec_rows),
         "sources_total":   bid.sections_total or 8,
         "avg_confidence":  round(avg_conf, 2),
-        "flags_raised":    flag_count_total + (bid.flag_low_conf or 0) + (bid.flag_conflicts or 0) + (bid.flag_high_risk or 0) + (bid.flag_missing_rate or 0),
+        "flags_raised":    flag_count_total,
         "started_at":      bid.compile_started_at.isoformat() if bid.compile_started_at else None,
         "finished_at":     bid.compile_finished_at.isoformat() if bid.compile_finished_at else None,
         "sections": [
