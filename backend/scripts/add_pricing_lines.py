@@ -4,6 +4,8 @@ Idempotent: CREATE IF NOT EXISTS, skips bids that already have lines.
 """
 import asyncio
 import sys
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

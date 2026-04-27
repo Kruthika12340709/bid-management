@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Icon } from '../ui/Icon';
 import Commentary from '../ui/Commentary';
 import BID_DATA from '../../data/mockData';
@@ -17,6 +17,13 @@ import AuditLog from '../../pages/AuditLog';
 
 export default function BidApp({ activeTab, onTabChange, user, onUserChange, showUserMenu, setShowUserMenu, bid, setBid }) {
   const isDirector = user.id === 'director';
+  const [tip, setTip] = useState(null);
+
+  function showTip(e, label) {
+    const r = e.currentTarget.getBoundingClientRect();
+    setTip({ label, y: r.top + r.height / 2 });
+  }
+  function hideTip() { setTip(null); }
 
   const tabs = isDirector ? [
     { id: 'dashboard', label: 'Dashboard',     icon: Icon.layers },
@@ -41,6 +48,17 @@ export default function BidApp({ activeTab, onTabChange, user, onUserChange, sho
 
   return (
     <div className="app">
+      {tip && (
+        <div style={{
+          position: 'fixed', left: 64, top: tip.y, transform: 'translateY(-50%)',
+          background: '#0F172A', color: '#fff', fontSize: 11.5, fontWeight: 600,
+          padding: '5px 10px', borderRadius: 6, whiteSpace: 'nowrap',
+          zIndex: 99999, pointerEvents: 'none',
+          boxShadow: '0 4px 14px rgba(0,0,0,0.22)',
+        }}>
+          {tip.label}
+        </div>
+      )}
       <div className="app-content">
 
         {/* ── Sidenav ── */}
@@ -55,9 +73,10 @@ export default function BidApp({ activeTab, onTabChange, user, onUserChange, sho
               const showInputs  = t.badge === 'inputs'  && inputsCount  > 0;
               return (
                 <button key={t.id}
-                  title={t.label}
                   className={`app-sidenav-btn ${activeTab === t.id ? 'active' : ''}`}
-                  onClick={() => { onTabChange(t.id); if (t.id !== 'bids') setBid(null); }}>
+                  onClick={() => { onTabChange(t.id); if (t.id !== 'bids') setBid(null); }}
+                  onMouseEnter={e => showTip(e, t.label)}
+                  onMouseLeave={hideTip}>
                   {t.icon(18)}
                   {showPending && <span className="nav-badge-mini">{pendingCount}</span>}
                   {showInputs  && <span className="nav-badge-mini warn">{inputsCount}</span>}
@@ -68,14 +87,17 @@ export default function BidApp({ activeTab, onTabChange, user, onUserChange, sho
           </div>
 
           <div style={{ borderTop: '1px solid var(--neutral-7)', padding: '6px 0', flexShrink: 0 }}>
-            <button className="app-sidenav-btn">
+            <button className="app-sidenav-btn"
+              onMouseEnter={e => showTip(e, 'Notifications')}
+              onMouseLeave={hideTip}>
               {Icon.bell(18)}
-              <span className="nav-tooltip">Notifications</span>
             </button>
             <div style={{ position: 'relative' }}>
-              <button className={`app-sidenav-btn ${showUserMenu ? 'active' : ''}`} onClick={() => setShowUserMenu(v => !v)}>
+              <button className={`app-sidenav-btn ${showUserMenu ? 'active' : ''}`}
+                onClick={() => setShowUserMenu(v => !v)}
+                onMouseEnter={e => showTip(e, `${user.name} · ${user.role}`)}
+                onMouseLeave={hideTip}>
                 <div className={`user-avatar ${user.avatarClass}`} style={{ width: 26, height: 26, fontSize: 10, flexShrink: 0 }}>{user.initials}</div>
-                <span className="nav-tooltip">{user.name} · {user.role}</span>
               </button>
               {showUserMenu && (
                 <div style={{ position: 'absolute', bottom: 4, left: 'calc(100% + 8px)', background: '#fff', border: '1px solid var(--neutral-7)', borderRadius: 12, boxShadow: '0 8px 30px rgba(15,23,42,0.12)', width: 280, padding: 6, zIndex: 999 }}>
@@ -107,7 +129,7 @@ export default function BidApp({ activeTab, onTabChange, user, onUserChange, sho
           {activeTab === 'dashboard'   && <Dashboard   user={user} onTabChange={onTabChange} onOpenBid={b => { onTabChange('pipeline'); setBid(b); }} />}
           {activeTab === 'pipeline'    && (bid ? <BidDetail bid={bid} user={user} onBack={() => setBid(null)} /> : <Pipeline     user={user} onOpenBid={b => setBid(b)} />)}
           {activeTab === 'bids'        && (bid ? <BidDetail bid={bid} user={user} onBack={() => setBid(null)} /> : <BidsList     user={user} onTabChange={onTabChange} onOpenBid={b => setBid(b)} />)}
-          {activeTab === 'hil'         && (bid ? <BidDetail bid={bid} user={user} onBack={() => setBid(null)} /> : <HILQueue     user={user} onOpenBid={b => setBid(b)} />)}
+          {activeTab === 'hil'         && (bid ? <BidDetail bid={bid} user={user} onBack={() => setBid(null)} defaultSection="risks" /> : <HILQueue     user={user} onOpenBid={b => setBid(b)} />)}
           {activeTab === 'inputs'      && <InputValidation user={user} />}
           {activeTab === 'compilation' && <Compilation user={user} onOpenBid={b => { onTabChange('pipeline'); setBid(b); }} />}
           {activeTab === 'pricing'     && <PricingPanel user={user} />}

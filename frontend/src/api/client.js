@@ -107,7 +107,11 @@ export const inputsApi = {
   list:               ()              => client.get('/inputs/').then(r => r.data),
   requestMissing:     (rfpId, cat)    => client.post(`/inputs/${rfpId}/request-missing/${encodeURIComponent(cat)}`).then(r => r.data),
   confirmCompilation: (rfpId)         => client.post(`/inputs/${rfpId}/confirm-compilation`).then(r => r.data),
+<<<<<<< HEAD
   createFromJson:     (data)          => client.post('/inputs/create-from-json', data).then(r => r.data),
+=======
+  recordDecision:     (rfpId, body)   => client.post(`/inputs/${rfpId}/decisions`, body).then(r => r.data),
+>>>>>>> 48237f6350af39ed2581294ea97bcfd19d42ae2d
 };
 
 export const documentsApi = {

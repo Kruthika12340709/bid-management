@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Icon } from '../components/ui/Icon';
 import { useBids } from '../hooks/useApiData';
 import { stages, users } from '../utils/adapt';
 import { downloadCSV } from '../utils/csv';
+import Pagination from '../components/ui/Pagination';
+
+const PAGE_SIZE = 10;
 
 const STAGE_COLOR = {
   validating:    '#94A3B8',  // Awaiting Inputs (grey)
@@ -23,9 +26,14 @@ function relTime(iso) {
   return `${Math.round(ago / 86400)}d ago`;
 }
 
+const STAGE_PRIORITY = { compiling: 0, pending: 1, approved: 2, validating: 3, inputs_ready: 4, submitted: 5 };
+
 export default function Pipeline({ onOpenBid }) {
   const { bids, error } = useBids();
   const [stageFilter, setStageFilter] = useState('all');
+  const [page, setPage] = useState(1);
+
+  useEffect(() => setPage(1), [stageFilter]);
 
   if (error) return <div style={{ padding: 40, color: '#DC2626' }}>API error: {String(error)}</div>;
   if (!bids) return <div style={{ padding: 40, color: '#94A3B8' }}>Loading pipeline…</div>;
@@ -34,6 +42,14 @@ export default function Pipeline({ onOpenBid }) {
 
   let visible = bids;
   if (stageFilter !== 'all') visible = visible.filter(b => b.stage === stageFilter);
+
+  const sorted = [...visible].sort((a, b) => {
+    const pa = STAGE_PRIORITY[a.stage] ?? 3;
+    const pb = STAGE_PRIORITY[b.stage] ?? 3;
+    if (pa !== pb) return pa - pb;
+    return a.daysLeft - b.daysLeft;
+  });
+  const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const overdue = bids.filter(b => b.daysLeft <= 2 && b.stage !== 'submitted' && !b.outcome);
 
@@ -99,7 +115,7 @@ export default function Pipeline({ onOpenBid }) {
       <div className="card">
         <div className="card-header">
           <div className="card-title">{visible.length} bids · {stageFilter === 'all' ? 'all stages' : stages.find(s => s.key === stageFilter)?.label}</div>
-          <div style={{ fontSize: 11, color: '#64748B' }}>Sorted by deadline</div>
+          <div style={{ fontSize: 11, color: '#64748B' }}>Active stages first · then by deadline</div>
         </div>
         <table className="data-table">
           <thead>
@@ -116,7 +132,7 @@ export default function Pipeline({ onOpenBid }) {
             </tr>
           </thead>
           <tbody>
-            {visible.sort((a, b) => a.daysLeft - b.daysLeft).map(b => {
+            {paginated.map(b => {
               const stg = stages.find(s => s.key === b.stage);
               const owner = users[b.assigned];
               const isOverdue = b.daysLeft <= 2 && b.stage !== 'submitted' && !b.outcome;
@@ -170,6 +186,7 @@ export default function Pipeline({ onOpenBid }) {
             })}
           </tbody>
         </table>
+        <Pagination total={visible.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
       </div>
     </div>
   );

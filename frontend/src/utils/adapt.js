@@ -31,6 +31,7 @@ export function adaptBid(b) {
     assigned:  userId,
     sectionsComplete: b.sections_complete,
     sectionsTotal:    b.sections_total,
+    flagCount: b.section_flag_count ?? (b.flag_low_conf || 0) + (b.flag_conflicts || 0) + (b.flag_missing_rate || 0) + (b.flag_high_risk || 0),
     flags: {
       lowConf:     b.flag_low_conf,
       conflicts:   b.flag_conflicts,

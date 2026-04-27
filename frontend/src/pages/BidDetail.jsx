@@ -7,11 +7,11 @@ import { sections as MOCK_SECTIONS, pricingLines, users } from '../utils/adapt';
 
 const CO_APPROVAL_VALUE_THRESHOLD = 1000000;
 
-export default function BidDetail({ bid: initialBid, user, onBack }) {
+export default function BidDetail({ bid: initialBid, user, onBack, defaultSection = 'pricing' }) {
   const isDirector = user.id === 'director';
   const { bid, sections, risks, error, refresh } = useBidDetail(initialBid?.id);
 
-  const [activeSection,   setActiveSection]   = useState('pricing');
+  const [activeSection,   setActiveSection]   = useState(defaultSection);
   const [pendingMargin,   setPendingMargin]   = useState(null);
   const [marginConfirmed, setMarginConfirmed] = useState(false);
   const [edits,           setEdits]           = useState({});
@@ -214,6 +214,44 @@ export default function BidDetail({ bid: initialBid, user, onBack }) {
           </div>
         </div>
       </div>
+
+      {bid.stage === 'submitted' && (
+        <div className="card" style={{ marginBottom: 14, border: bid.outcome === 'Awarded' ? '1px solid #86EFAC' : bid.outcome ? '1px solid #FCA5A5' : '1px solid #E2E8F0' }}>
+          <div className="card-header" style={{ background: bid.outcome === 'Awarded' ? '#F0FDF4' : bid.outcome ? '#FEF2F2' : '#FAFBFD' }}>
+            <div>
+              <div className="card-title" style={{ color: bid.outcome === 'Awarded' ? '#15803D' : bid.outcome ? '#DC2626' : '#0F172A' }}>
+                {bid.outcome === 'Awarded' ? '🏆 Bid Awarded' : bid.outcome === 'Not Awarded' ? '✗ Bid Not Awarded' : '⏳ Awaiting Outcome'}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                Submitted · {bid.submittedAt ? new Date(bid.submittedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'date unknown'}
+              </div>
+            </div>
+            {bid.outcome && (
+              <span className={`badge ${bid.outcome === 'Awarded' ? 'badge-success' : 'badge-error'}`} style={{ fontSize: 12, padding: '6px 14px' }}>
+                {bid.outcome}
+              </span>
+            )}
+          </div>
+          <div style={{ padding: '14px 20px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+            <div>
+              <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Submitted Value</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{fmtMoney(bid.value, bid.currency)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Final Margin</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{bid.currentMargin || bid.margin}%</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Win Probability</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: (bid.winProb || 0) >= 0.7 ? '#16A34A' : '#D97706' }}>{Math.round((bid.winProb || 0) * 100)}%</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Sections Approved</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{approvedCount} / 8</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="section-tabs">
         {sections.map(s => (

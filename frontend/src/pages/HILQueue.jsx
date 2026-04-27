@@ -10,7 +10,12 @@ export default function HILQueue({ user, onOpenBid }) {
   if (error) return <div style={{ padding: 40, color: '#DC2626' }}>API error: {String(error)}</div>;
   if (!bids) return <div style={{ padding: 40, color: '#94A3B8' }}>Loading queue…</div>;
 
-  const queue = bids.filter(b => b.stage === 'pending').sort((a, b) => a.daysLeft - b.daysLeft);
+  const CO_APPROVAL_VALUE_THRESHOLD = 1_000_000;
+  const needsCoApproval = b =>
+    b.value > CO_APPROVAL_VALUE_THRESHOLD || (b.flags?.highRisk ?? 0) > 0;
+
+  const allPending = bids.filter(b => b.stage === 'pending').sort((a, b) => a.daysLeft - b.daysLeft);
+  const queue = isDirector ? allPending : allPending.filter(needsCoApproval);
 
   return (
     <div>
@@ -18,7 +23,11 @@ export default function HILQueue({ user, onOpenBid }) {
         <div className="page-banner-dot" />
         <div className="page-banner-text">
           <div className="page-banner-title">Interactive HIL Approval · {queue.length} awaiting</div>
-          <div className="page-banner-sub">{isDirector ? 'Bid Director — primary approval gate (BR-002, BR-003, BR-005)' : 'Bid Manager — co-review and override secondary confirmation'}</div>
+          <div className="page-banner-sub">
+            {isDirector
+              ? 'Bid Director — primary approval gate (BR-002, BR-003, BR-005)'
+              : 'Bid Manager — co-approval required for high-value or high-risk bids only'}
+          </div>
         </div>
       </div>
 
@@ -35,7 +44,7 @@ export default function HILQueue({ user, onOpenBid }) {
 
       <div style={{ display: 'grid', gap: 14 }}>
         {queue.map(b => {
-          const totalFlags = b.flags.lowConf + b.flags.conflicts + b.flags.missingRate + b.flags.highRisk;
+          const totalFlags = b.flagCount || 0;
           return (
             <div key={b.id} className="card" style={{ cursor: 'pointer' }} onClick={() => onOpenBid(b)}>
               <div className="card-pad" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 18, alignItems: 'center' }}>
