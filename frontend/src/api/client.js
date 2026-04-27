@@ -2,13 +2,13 @@
 // No third-party deps — just the browser's native fetch API.
 
 const BASE_URL = '/api';
-const TIMEOUT  = 15000;
+const TIMEOUT = 15000;
 
 // Active role — set by Desktop.jsx whenever the user switches via the avatar
 // dropdown. Read on every request so role-gated endpoints get enforced.
 let activeRole = 'director';
 export function setActiveRole(role) { activeRole = role || 'director'; }
-export function getActiveRole()     { return activeRole; }
+export function getActiveRole() { return activeRole; }
 
 async function request(method, path, { params, body, headers, responseType } = {}) {
   let url = BASE_URL + path;
@@ -23,7 +23,7 @@ async function request(method, path, { params, body, headers, responseType } = {
   }
 
   const ctrl = new AbortController();
-  const tid  = setTimeout(() => ctrl.abort(), TIMEOUT);
+  const tid = setTimeout(() => ctrl.abort(), TIMEOUT);
 
   let res;
   try {
@@ -31,8 +31,8 @@ async function request(method, path, { params, body, headers, responseType } = {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Role':  activeRole,
-        Accept:         responseType === 'text' ? 'text/html, text/plain' : 'application/json',
+        'X-User-Role': activeRole,
+        Accept: responseType === 'text' ? 'text/html, text/plain' : 'application/json',
         ...(headers || {}),
       },
       body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
@@ -66,37 +66,37 @@ async function request(method, path, { params, body, headers, responseType } = {
 }
 
 const client = {
-  get:    (path, opts)       => request('GET',    path, opts),
-  post:   (path, body, opts) => request('POST',   path, { ...(opts || {}), body }),
-  put:    (path, body, opts) => request('PUT',    path, { ...(opts || {}), body }),
-  patch:  (path, body, opts) => request('PATCH',  path, { ...(opts || {}), body }),
-  delete: (path, opts)       => request('DELETE', path, opts),
+  get: (path, opts) => request('GET', path, opts),
+  post: (path, body, opts) => request('POST', path, { ...(opts || {}), body }),
+  put: (path, body, opts) => request('PUT', path, { ...(opts || {}), body }),
+  patch: (path, body, opts) => request('PATCH', path, { ...(opts || {}), body }),
+  delete: (path, opts) => request('DELETE', path, opts),
 };
 
 // ─── Typed API surface (unchanged) ──────────────────────────────────────────
 
 export const bidsApi = {
-  getAll:                ()        => client.get('/bids/').then(r => r.data),
-  getById:               (ref)     => client.get(`/bids/${ref}`).then(r => r.data),
-  getSections:           (ref)     => client.get(`/bids/${ref}/sections`).then(r => r.data),
-  getRisks:              (ref)     => client.get(`/bids/${ref}/risks`).then(r => r.data),
-  getCompilationTelemetry:(ref)    => client.get(`/bids/${ref}/compilation-telemetry`).then(r => r.data),
-  routeToDirector:       (ref, b)  => client.post(`/bids/${ref}/route-to-director`, b).then(r => r.data),
-  submit:                (ref, b)  => client.post(`/bids/${ref}/submit`, b).then(r => r.data),
-  getPricingLines:       (ref)     => client.get(`/bids/${ref}/pricing-lines`).then(r => r.data),
-  updateLineMargin:      (ref, n, b) => client.post(`/bids/${ref}/pricing-lines/${n}/margin`,       b).then(r => r.data),
-  resolveMissingRate:    (ref, n, b) => client.post(`/bids/${ref}/pricing-lines/${n}/resolve-rate`, b).then(r => r.data),
+  getAll: () => client.get('/bids/').then(r => r.data),
+  getById: (ref) => client.get(`/bids/${ref}`).then(r => r.data),
+  getSections: (ref) => client.get(`/bids/${ref}/sections`).then(r => r.data),
+  getRisks: (ref) => client.get(`/bids/${ref}/risks`).then(r => r.data),
+  getCompilationTelemetry: (ref) => client.get(`/bids/${ref}/compilation-telemetry`).then(r => r.data),
+  routeToDirector: (ref, b) => client.post(`/bids/${ref}/route-to-director`, b).then(r => r.data),
+  submit: (ref, b) => client.post(`/bids/${ref}/submit`, b).then(r => r.data),
+  getPricingLines: (ref) => client.get(`/bids/${ref}/pricing-lines`).then(r => r.data),
+  updateLineMargin: (ref, n, b) => client.post(`/bids/${ref}/pricing-lines/${n}/margin`, b).then(r => r.data),
+  resolveMissingRate: (ref, n, b) => client.post(`/bids/${ref}/pricing-lines/${n}/resolve-rate`, b).then(r => r.data),
 };
 
 export const hilApi = {
-  getQueue:         ()                       => client.get('/hil/queue').then(r => r.data),
-  approveSection:   (ref, key, body)         => client.post(`/hil/${ref}/sections/${key}/approve`, body).then(r => r.data),
-  editSection:      (ref, key, body)         => client.post(`/hil/${ref}/sections/${key}/edit`,    body).then(r => r.data),
-  rejectSection:    (ref, key, body)         => client.post(`/hil/${ref}/sections/${key}/reject`,  body).then(r => r.data),
-  marginOverride:   (ref, body)              => client.post(`/hil/${ref}/margin-override`,         body).then(r => r.data),
-  acknowledgeRisk:  (ref, riskRef, body)     => client.post(`/hil/${ref}/risks/${riskRef}/acknowledge`, body).then(r => r.data),
-  signOff:          (ref, body)              => client.post(`/hil/${ref}/sign-off`,                body).then(r => r.data),
-  managerCoApprove: (ref, body)              => client.post(`/hil/${ref}/manager-co-approve`,      body).then(r => r.data),
+  getQueue: () => client.get('/hil/queue').then(r => r.data),
+  approveSection: (ref, key, body) => client.post(`/hil/${ref}/sections/${key}/approve`, body).then(r => r.data),
+  editSection: (ref, key, body) => client.post(`/hil/${ref}/sections/${key}/edit`, body).then(r => r.data),
+  rejectSection: (ref, key, body) => client.post(`/hil/${ref}/sections/${key}/reject`, body).then(r => r.data),
+  marginOverride: (ref, body) => client.post(`/hil/${ref}/margin-override`, body).then(r => r.data),
+  acknowledgeRisk: (ref, riskRef, body) => client.post(`/hil/${ref}/risks/${riskRef}/acknowledge`, body).then(r => r.data),
+  signOff: (ref, body) => client.post(`/hil/${ref}/sign-off`, body).then(r => r.data),
+  managerCoApprove: (ref, body) => client.post(`/hil/${ref}/manager-co-approve`, body).then(r => r.data),
 };
 
 export const auditApi = {
@@ -104,29 +104,25 @@ export const auditApi = {
 };
 
 export const inputsApi = {
-  list:               ()              => client.get('/inputs/').then(r => r.data),
-  requestMissing:     (rfpId, cat)    => client.post(`/inputs/${rfpId}/request-missing/${encodeURIComponent(cat)}`).then(r => r.data),
-  confirmCompilation: (rfpId)         => client.post(`/inputs/${rfpId}/confirm-compilation`).then(r => r.data),
-<<<<<<< HEAD
-  createFromJson:     (data)          => client.post('/inputs/create-from-json', data).then(r => r.data),
-=======
-  recordDecision:     (rfpId, body)   => client.post(`/inputs/${rfpId}/decisions`, body).then(r => r.data),
->>>>>>> 48237f6350af39ed2581294ea97bcfd19d42ae2d
+  list: () => client.get('/inputs/').then(r => r.data),
+  requestMissing: (rfpId, cat) => client.post(`/inputs/${rfpId}/request-missing/${encodeURIComponent(cat)}`).then(r => r.data),
+  confirmCompilation: (rfpId) => client.post(`/inputs/${rfpId}/confirm-compilation`).then(r => r.data),
+  createFromJson: (data) => client.post('/inputs/create-from-json', data).then(r => r.data),
 };
 
 export const documentsApi = {
-  listTemplates: ()    => client.get('/documents/templates').then(r => r.data),
-  renderHtml:    (ref) => client.get(`/documents/bids/${ref}/document`, { responseType: 'text' }).then(r => r.data),
-  url:           (ref) => `/api/documents/bids/${ref}/document?format=html`,
+  listTemplates: () => client.get('/documents/templates').then(r => r.data),
+  renderHtml: (ref) => client.get(`/documents/bids/${ref}/document`, { responseType: 'text' }).then(r => r.data),
+  url: (ref) => `/api/documents/bids/${ref}/document?format=html`,
 };
 
 export const reportsApi = {
-  dashboard:           () => client.get('/reports/dashboard').then(r => r.data),
-  compilationQuality:  () => client.get('/reports/compilation-quality').then(r => r.data),
-  pricingVariance:     () => client.get('/reports/pricing-variance').then(r => r.data),
-  approvalCorrection:  () => client.get('/reports/approval-correction').then(r => r.data),
-  outcomes:            () => client.get('/reports/outcomes').then(r => r.data),
-  riskProfile:         () => client.get('/reports/risk-profile').then(r => r.data),
+  dashboard: () => client.get('/reports/dashboard').then(r => r.data),
+  compilationQuality: () => client.get('/reports/compilation-quality').then(r => r.data),
+  pricingVariance: () => client.get('/reports/pricing-variance').then(r => r.data),
+  approvalCorrection: () => client.get('/reports/approval-correction').then(r => r.data),
+  outcomes: () => client.get('/reports/outcomes').then(r => r.data),
+  riskProfile: () => client.get('/reports/risk-profile').then(r => r.data),
 };
 
 export default client;

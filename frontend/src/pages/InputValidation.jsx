@@ -4,22 +4,22 @@ import { useInputs } from '../hooks/useApiData';
 import { inputsApi } from '../api/client';
 
 const STATUS = {
-  valid:          { bg: '#DCFCE7', fg: '#16A34A', row: 'transparent', label: 'Valid',          icon: '✓' },
-  low_confidence: { bg: '#FEF3C7', fg: '#B45309', row: '#FEFCE8',     label: 'Low Confidence', icon: '⚠' },
-  invalid:        { bg: '#FFE4E6', fg: '#BE123C', row: '#FFF5F5',     label: 'Invalid',         icon: '✗' },
-  missing:        { bg: '#FEE2E2', fg: '#DC2626', row: '#FFF5F5',     label: 'Missing',         icon: '✗' },
-  received:       { bg: '#DCFCE7', fg: '#16A34A', row: 'transparent', label: 'Valid',           icon: '✓' },
-  malformed:      { bg: '#FFE4E6', fg: '#BE123C', row: '#FFF5F5',     label: 'Invalid',         icon: '✗' },
+  valid: { bg: '#DCFCE7', fg: '#16A34A', row: 'transparent', label: 'Valid', icon: '✓' },
+  low_confidence: { bg: '#FEF3C7', fg: '#B45309', row: '#FEFCE8', label: 'Low Confidence', icon: '⚠' },
+  invalid: { bg: '#FFE4E6', fg: '#BE123C', row: '#FFF5F5', label: 'Invalid', icon: '✗' },
+  missing: { bg: '#FEE2E2', fg: '#DC2626', row: '#FFF5F5', label: 'Missing', icon: '✗' },
+  received: { bg: '#DCFCE7', fg: '#16A34A', row: 'transparent', label: 'Valid', icon: '✓' },
+  malformed: { bg: '#FFE4E6', fg: '#BE123C', row: '#FFF5F5', label: 'Invalid', icon: '✗' },
 };
 
 const DECISION_BADGE = {
   proceed: { label: 'Proceeding', bg: '#EDE9FE', fg: '#6D28D9' },
-  request: { label: 'Requested',  bg: '#DBEAFE', fg: '#1D4ED8' },
-  descope: { label: 'De-scoped',  bg: '#F1F5F9', fg: '#475569' },
+  request: { label: 'Requested', bg: '#DBEAFE', fg: '#1D4ED8' },
+  descope: { label: 'De-scoped', bg: '#F1F5F9', fg: '#475569' },
 };
 
 function ConfidenceBar({ value }) {
-  const pct   = Math.round((value || 0) * 100);
+  const pct = Math.round((value || 0) * 100);
   const color = pct >= 80 ? '#16A34A' : pct >= 60 ? '#D97706' : '#DC2626';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -34,18 +34,13 @@ function ConfidenceBar({ value }) {
 export default function InputValidation({ user }) {
   const isManager = user.id === 'manager';
   const { data, error, refresh } = useInputs();
-<<<<<<< HEAD
   const [requested, setRequested] = useState({});
-  const [busy, setBusy]           = useState(false);
-  const [toast, setToast]         = useState(null);
-  const [showPopup, setShowPopup] = useState(false);
-  const [jsonText, setJsonText]   = useState('');
-  const [validationError, setValidationError] = useState('');
-  const [isValid, setIsValid]     = useState(false);
-=======
-  const [busy, setBusy]   = useState(false);
+  const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
->>>>>>> 48237f6350af39ed2581294ea97bcfd19d42ae2d
+  const [showPopup, setShowPopup] = useState(false);
+  const [jsonText, setJsonText] = useState('');
+  const [validationError, setValidationError] = useState('');
+  const [isValid, setIsValid] = useState(false);
 
   React.useEffect(() => {
     if (toast) { const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); }
@@ -83,7 +78,7 @@ export default function InputValidation({ user }) {
   }
 
   if (error) return <div style={{ padding: 40, color: '#DC2626' }}>API error: {String(error)}</div>;
-  if (!data)  return <div style={{ padding: 40, color: '#94A3B8' }}>Loading inputs…</div>;
+  if (!data) return <div style={{ padding: 40, color: '#94A3B8' }}>Loading inputs…</div>;
 
   async function recordDecision(rfpId, category, action) {
     try {
@@ -115,20 +110,12 @@ export default function InputValidation({ user }) {
     <div>
       <div className="page-banner" style={{ background: 'linear-gradient(90deg, #06B6D4 0%, #5929d0 60%, #CF008B 100%)' }}>
         <div className="page-banner-dot" />
-<<<<<<< HEAD
         <div className="page-banner-text" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div className="page-banner-title">Input Validation Dashboard</div>
             <div className="page-banner-sub">8 input categories must be Received before compilation can start · BR-001</div>
           </div>
           <button onClick={() => setShowPopup(true)} className="btn btn-primary btn-sm" title="Add new RFP from JSON">{Icon.plus(14)} Add RFP</button>
-=======
-        <div className="page-banner-text">
-          <div className="page-banner-title">Input Validation Dashboard</div>
-          <div className="page-banner-sub">
-            Review data quality &amp; confidence · Proceed, Request, or De-scope before compilation · BR-001
-          </div>
->>>>>>> 48237f6350af39ed2581294ea97bcfd19d42ae2d
         </div>
       </div>
 
@@ -176,14 +163,14 @@ export default function InputValidation({ user }) {
       )}
 
       {data.map(b => {
-        const blockers     = b.inputs.filter(isBlocking);
-        const ready        = blockers.length === 0;
-        const validCount   = b.inputs.filter(i => i.status === 'valid' || i.status === 'received').length;
-        const lowCnt       = b.inputs.filter(i => i.status === 'low_confidence').length;
-        const invalidCnt   = b.inputs.filter(i => i.status === 'invalid' || i.status === 'malformed').length;
-        const missingCnt   = b.inputs.filter(i => i.status === 'missing').length;
-        const confInputs   = b.inputs.filter(i => i.confidence != null);
-        const avgConf      = confInputs.length ? confInputs.reduce((s, i) => s + i.confidence, 0) / confInputs.length : 0;
+        const blockers = b.inputs.filter(isBlocking);
+        const ready = blockers.length === 0;
+        const validCount = b.inputs.filter(i => i.status === 'valid' || i.status === 'received').length;
+        const lowCnt = b.inputs.filter(i => i.status === 'low_confidence').length;
+        const invalidCnt = b.inputs.filter(i => i.status === 'invalid' || i.status === 'malformed').length;
+        const missingCnt = b.inputs.filter(i => i.status === 'missing').length;
+        const confInputs = b.inputs.filter(i => i.confidence != null);
+        const avgConf = confInputs.length ? confInputs.reduce((s, i) => s + i.confidence, 0) / confInputs.length : 0;
         const alreadyCompiled = !!b.compiled_bid_ref;
 
         return (
@@ -194,7 +181,7 @@ export default function InputValidation({ user }) {
                 <div style={{ fontSize: 11, color: '#64748B', display: 'flex', gap: 10, alignItems: 'center', marginTop: 3 }}>
                   <span>{b.title}</span>
                   <span style={{ color: '#16A34A', fontWeight: 600 }}>{validCount} valid</span>
-                  {lowCnt     > 0 && <span style={{ color: '#B45309', fontWeight: 600 }}>{lowCnt} low confidence</span>}
+                  {lowCnt > 0 && <span style={{ color: '#B45309', fontWeight: 600 }}>{lowCnt} low confidence</span>}
                   {invalidCnt > 0 && <span style={{ color: '#BE123C', fontWeight: 600 }}>{invalidCnt} invalid</span>}
                   {missingCnt > 0 && <span style={{ color: '#DC2626', fontWeight: 600 }}>{missingCnt} missing</span>}
                   <span style={{ color: '#94A3B8' }}>· avg conf <strong style={{ color: avgConf >= 0.75 ? '#16A34A' : '#D97706' }}>{Math.round(avgConf * 100)}%</strong></span>
@@ -237,11 +224,11 @@ export default function InputValidation({ user }) {
               </thead>
               <tbody>
                 {b.inputs.map((inp, idx) => {
-                  const st        = STATUS[inp.status] || STATUS.missing;
+                  const st = STATUS[inp.status] || STATUS.missing;
                   const tsDisplay = inp.ts ? new Date(inp.ts).toISOString().slice(0, 16).replace('T', ' ') : '—';
-                  const isOk      = inp.status === 'valid' || inp.status === 'received';
-                  const dec       = inp.decision;
-                  const decBadge  = dec ? DECISION_BADGE[dec.action] : null;
+                  const isOk = inp.status === 'valid' || inp.status === 'received';
+                  const dec = inp.decision;
+                  const decBadge = dec ? DECISION_BADGE[dec.action] : null;
 
                   return (
                     <React.Fragment key={idx}>
