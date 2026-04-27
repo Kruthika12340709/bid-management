@@ -15,8 +15,43 @@ export default function InputValidation({ user }) {
   const [requested, setRequested] = useState({});
   const [busy, setBusy]           = useState(false);
   const [toast, setToast]         = useState(null);
+  const [showPopup, setShowPopup] = useState(false);
+  const [jsonText, setJsonText]   = useState('');
+  const [validationError, setValidationError] = useState('');
+  const [isValid, setIsValid]     = useState(false);
 
   React.useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
+
+  function validateJson() {
+    try {
+      const data = JSON.parse(jsonText);
+      if (!data.rfp_id || !data.modules) {
+        setValidationError('Missing rfp_id or modules');
+        setIsValid(false);
+        return;
+      }
+      setValidationError('');
+      setIsValid(true);
+    } catch (e) {
+      setValidationError('Invalid JSON');
+      setIsValid(false);
+    }
+  }
+
+  async function startCompilation() {
+    try {
+      const data = JSON.parse(jsonText);
+      await inputsApi.createFromJson(data);
+      setToast('Started compiling');
+      refresh();
+      setShowPopup(false);
+      setJsonText('');
+      setIsValid(false);
+    } catch (e) {
+      const errMsg = e.response?.data?.detail || e.message || 'Unknown error';
+      setToast(`Error: ${errMsg}`);
+    }
+  }
 
   if (error) return <div style={{ padding: 40, color: '#DC2626' }}>API error: {String(error)}</div>;
   if (!data) return <div style={{ padding: 40, color: '#94A3B8' }}>Loading inputs…</div>;
@@ -45,9 +80,12 @@ export default function InputValidation({ user }) {
     <div>
       <div className="page-banner" style={{ background: 'linear-gradient(90deg, #06B6D4 0%, #5929d0 60%, #CF008B 100%)' }}>
         <div className="page-banner-dot" />
-        <div className="page-banner-text">
-          <div className="page-banner-title">Input Validation Dashboard</div>
-          <div className="page-banner-sub">8 input categories must be Received before compilation can start · BR-001</div>
+        <div className="page-banner-text" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div className="page-banner-title">Input Validation Dashboard</div>
+            <div className="page-banner-sub">8 input categories must be Received before compilation can start · BR-001</div>
+          </div>
+          <button onClick={() => setShowPopup(true)} className="btn btn-primary btn-sm" title="Add new RFP from JSON">{Icon.plus(14)} Add RFP</button>
         </div>
       </div>
 
@@ -60,6 +98,35 @@ export default function InputValidation({ user }) {
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: '#0F172A', color: '#fff', padding: '10px 16px', borderRadius: 10, fontSize: 12, zIndex: 2000, boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
           {toast}
+        </div>
+      )}
+
+      {showPopup && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="card" style={{ width: '500px', maxHeight: '80vh', overflow: 'auto' }}>
+            <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>Add RFP from JSON</div>
+              <button onClick={() => setShowPopup(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20 }}>×</button>
+            </div>
+            <div className="card-pad">
+              <textarea
+                value={jsonText}
+                onChange={e => setJsonText(e.target.value)}
+                placeholder="Paste JSON here"
+                style={{ width: '100%', height: '200px', fontFamily: 'monospace' }}
+              />
+              <div style={{ marginTop: 10 }}>
+                <button onClick={validateJson} className="btn btn-secondary btn-sm">Validate</button>
+                {validationError && <span style={{ color: '#DC2626', marginLeft: 10 }}>{validationError}</span>}
+                {isValid && <span style={{ color: '#16A34A', marginLeft: 10 }}>Everything is correct</span>}
+              </div>
+              {isValid && (
+                <div style={{ marginTop: 10 }}>
+                  <button onClick={startCompilation} className="btn btn-primary btn-sm">Start Compilation</button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

@@ -1,10 +1,26 @@
 services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: bid_management
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
   backend:
     build:
       context: .
     container_name: bid-backend
-    env_file:
-      - .env
+    # env_file:
+    #   - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://user:password@db:5432/bid_management
     ports:
       - "5000:5000"
     restart: unless-stopped
+    depends_on:
+      - db
+volumes:
+  postgres_data:

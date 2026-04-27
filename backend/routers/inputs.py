@@ -16,6 +16,7 @@ from typing import List, Dict, Any
 from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
 from uuid import UUID
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -41,6 +42,14 @@ SECTIONS_FROM_MODULES = [
     ("dependencies", "Dependency Map",       "dependency_module",  "v1.7"),
     ("acceptance",   "Acceptance Criteria",  "acceptance_module",  "v1.2"),
 ]
+
+
+class CreateFromJsonPayload(BaseModel):
+    rfp_id: str
+    client_name: str = ""
+    title: str = ""
+    deadline: date | None = None
+    modules: Dict[str, Any]
 
 
 @router.get("/")
@@ -104,7 +113,11 @@ async def _compile_section_progressively(bid_id: UUID, bid_ref: str, rfp_id: str
     """Background task — wait, then materialise one section.
     For 'effort' and 'schedule', invoke the real compile engine (AC-02 / AC-03).
     """
-    from compile_engine import compute_effort, compute_schedule
+    from compile_engine import (
+        compute_effort, compute_schedule, compute_pricing,
+        compute_quality, compute_deliverables, compute_risks,
+        compute_dependencies, compute_acceptance,
+    )
 
     await asyncio.sleep(delay_seconds)
     async with AsyncSessionLocal() as db:
@@ -126,6 +139,39 @@ async def _compile_section_progressively(bid_id: UUID, bid_ref: str, rfp_id: str
                 compiled_data = await compute_schedule(db, rfp_id, start)
                 if compiled_data:
                     flags_list = compiled_data.get("conflicts", [])
+                    flag_count = len(flags_list)
+            elif key == "pricing":
+                compiled_data = await compute_pricing(db, rfp_id)
+                if compiled_data:
+                    flags_list = compiled_data.get("flags", [])
+                    flag_count = len(flags_list)
+                    confidence = Decimal(str(compiled_data.get("confidence", 0.78)))
+            elif key == "quality":
+                compiled_data = await compute_quality(db, rfp_id)
+                if compiled_data:
+                    flags_list = compiled_data.get("flags", [])
+                    flag_count = len(flags_list)
+            elif key == "deliverables":
+                compiled_data = await compute_deliverables(db, rfp_id)
+                if isinstance(compiled_data, list):
+                    compiled_data = {"items": compiled_data, "flags": []}
+                if compiled_data:
+                    flags_list = compiled_data.get("flags", [])
+                    flag_count = len(flags_list)
+            elif key == "risks":
+                compiled_data = await compute_risks(db, rfp_id)
+                if compiled_data:
+                    flags_list = compiled_data.get("flags", [])
+                    flag_count = len(flags_list)
+            elif key == "dependencies":
+                compiled_data = await compute_dependencies(db, rfp_id)
+                if compiled_data:
+                    flags_list = compiled_data.get("flags", [])
+                    flag_count = len(flags_list)
+            elif key == "acceptance":
+                compiled_data = await compute_acceptance(db, rfp_id)
+                if compiled_data:
+                    flags_list = compiled_data.get("flags", [])
                     flag_count = len(flags_list)
 
         db.add(BidSection(
@@ -154,23 +200,28 @@ async def _finalise_compile(bid_id: UUID, bid_ref: str, total_delay: float):
     async with AsyncSessionLocal() as db:
         bid = await db.get(Bid, bid_id)
         if bid:
+            bid.stage = "pending"
             bid.compile_finished_at = datetime.now(timezone.utc)
-            bid.last_action_text    = "Compilation complete"
+            bid.last_action_text    = "Compilation complete — routed to Director"
             bid.last_action_by      = "Bid Engine"
             bid.last_action_at      = datetime.now(timezone.utc)
             db.add(BidAuditLog(
                 bid_id=bid_id, bid_reference=bid_ref,
                 action_type="Compiled", role="System", performed_by="Bid Engine",
-                detail=f"All 8 sections compiled — ready for Manager to route to Director",
+                detail=f"All 8 sections compiled — ready for Director review",
                 br_reference="BR-002",
             ))
             await db.commit()
 
 
 @router.post("/{rfp_id}/confirm-compilation")
-async def confirm_compilation(rfp_id: str,
+async def confirm_compilation_route(rfp_id: str,
                               role: str = Depends(get_user_role),
                               db: AsyncSession = Depends(get_db)):
+    return await _confirm_compilation(rfp_id, role, db)
+
+
+async def _confirm_compilation(rfp_id: str, role: str, db: AsyncSession):
     require_manager(role)
     """
     Creates the bid immediately, then schedules background tasks that materialise
@@ -244,15 +295,163 @@ async def confirm_compilation(rfp_id: str,
     # Schedule the 8 sections to compile one every 3 seconds.
     SECTION_INTERVAL_S = 3.0
     for i, (key, name, source, ver) in enumerate(SECTIONS_FROM_MODULES):
-        asyncio.create_task(_compile_section_progressively(
-            bid_id, new_ref, rfp_id, key, name, source, ver, delay_seconds=(i + 1) * SECTION_INTERVAL_S
-        ))
-    asyncio.create_task(_finalise_compile(bid_id, new_ref, total_delay=8 * SECTION_INTERVAL_S))
+        await _compile_section_progressively(
+            bid_id, new_ref, rfp_id, key, name, source, ver, delay_seconds=0
+        )
+    await _finalise_compile(bid_id, new_ref, total_delay=0)
 
     return {
         "status": "compilation triggered",
         "rfp_id": rfp_id,
         "bid_reference": new_ref,
-        "stage": "compiling",
-        "estimated_seconds": int(8 * SECTION_INTERVAL_S),
+        "stage": "pending",
+        "estimated_seconds": 0,
     }
+
+
+@router.post("/create-from-json")
+async def create_from_json(payload: CreateFromJsonPayload,
+                           role: str = Depends(get_user_role),
+                           db: AsyncSession = Depends(get_db)):
+    require_manager(role)
+
+    import json
+
+    rfp_id = payload.rfp_id
+    modules = payload.modules
+
+    if not rfp_id:
+        raise HTTPException(status_code=400, detail="rfp_id required")
+
+    if not modules or not isinstance(modules, dict):
+        raise HTTPException(status_code=400, detail="modules required")
+
+    required_fields = {
+        "rfp_module": ["title"],
+        "solution_module": ["tasks", "task_dependencies"],
+        "quality_module": ["metrics"],
+        "deliverable_module": ["deliverables"],
+        "risk_module": ["risks"],
+        "dependency_module": ["dependencies", "dependency_mapping"],
+        "pricing_module": ["rate_card"],
+        "acceptance_module": ["acceptance_criteria"],
+    }
+
+    for mod, fields in required_fields.items():
+        if mod not in modules:
+            raise HTTPException(status_code=400, detail=f"Missing module {mod}")
+        mod_data = modules[mod]
+        if not isinstance(mod_data, dict):
+            raise HTTPException(status_code=400, detail=f"{mod} must be object")
+        for field in fields:
+            if field not in mod_data:
+                raise HTTPException(status_code=400, detail=f"Missing {field} in {mod}")
+
+    try:
+        # Insert rfp_module
+        await db.execute(text(
+            "INSERT INTO rfp_module (rfp_id, client_name, title, deadline) "
+            "VALUES (:rfp_id, :client_name, :title, :deadline) "
+            "ON CONFLICT (rfp_id) DO UPDATE SET client_name = :client_name, title = :title, deadline = :deadline"
+        ), {
+            "rfp_id": rfp_id,
+            "client_name": payload.client_name or "",
+            "title": payload.title or "",
+            "deadline": payload.deadline,
+        })
+
+        # Insert solution_module
+        if "solution_module" in modules:
+            sol = modules["solution_module"]
+            await db.execute(text(
+                "INSERT INTO solution_module (rfp_id, tasks, task_dependencies) "
+                "VALUES (:rfp_id, :tasks, :task_dependencies)"
+            ), {
+                "rfp_id": rfp_id,
+                "tasks": json.dumps(sol.get("tasks")),
+                "task_dependencies": json.dumps(sol.get("task_dependencies")),
+            })
+
+        # Insert quality_module
+        if "quality_module" in modules:
+            qual = modules["quality_module"]
+            await db.execute(text(
+                "INSERT INTO quality_module (rfp_id, metrics) "
+                "VALUES (:rfp_id, :metrics)"
+            ), {
+                "rfp_id": rfp_id,
+                "metrics": json.dumps(qual.get("metrics")),
+            })
+
+        # Insert deliverable_module
+        if "deliverable_module" in modules:
+            deliv = modules["deliverable_module"]
+            await db.execute(text(
+                "INSERT INTO deliverable_module (rfp_id, deliverables) "
+                "VALUES (:rfp_id, :deliverables)"
+            ), {
+                "rfp_id": rfp_id,
+                "deliverables": json.dumps(deliv.get("deliverables")),
+            })
+
+        # Insert risk_module
+        if "risk_module" in modules:
+            risk = modules["risk_module"]
+            await db.execute(text(
+                "INSERT INTO risk_module (rfp_id, risks) "
+                "VALUES (:rfp_id, :risks)"
+            ), {
+                "rfp_id": rfp_id,
+                "risks": json.dumps(risk.get("risks")),
+            })
+
+        # Insert dependency_module
+        if "dependency_module" in modules:
+            dep = modules["dependency_module"]
+            await db.execute(text(
+                "INSERT INTO dependency_module (rfp_id, dependencies, dependency_mapping) "
+                "VALUES (:rfp_id, :dependencies, :dependency_mapping)"
+            ), {
+                "rfp_id": rfp_id,
+                "dependencies": json.dumps(dep.get("dependencies")),
+                "dependency_mapping": json.dumps(dep.get("dependency_mapping")),
+            })
+
+        # Insert pricing_module
+        if "pricing_module" in modules:
+            price = modules["pricing_module"]
+            rate_card = price.get("rate_card", {})
+            if isinstance(rate_card, dict):
+                margin = rate_card.get("margin_percentage", price.get("margin_percentage", 20))
+                cost = rate_card.get("total_estimated_cost", price.get("total_estimated_cost", 0))
+            else:
+                margin = price.get("margin_percentage", 20)
+                cost = price.get("total_estimated_cost", 0)
+            await db.execute(text(
+                "INSERT INTO pricing_module (rfp_id, rate_card, margin_percentage, total_estimated_cost) "
+                "VALUES (:rfp_id, :rate_card, :margin_percentage, :total_estimated_cost)"
+            ), {
+                "rfp_id": rfp_id,
+                "rate_card": json.dumps(rate_card),
+                "margin_percentage": margin,
+                "total_estimated_cost": cost,
+            })
+
+        # Insert acceptance_module
+        if "acceptance_module" in modules:
+            accept = modules["acceptance_module"]
+            await db.execute(text(
+                "INSERT INTO acceptance_module (rfp_id, acceptance_criteria) "
+                "VALUES (:rfp_id, :acceptance_criteria)"
+            ), {
+                "rfp_id": rfp_id,
+                "acceptance_criteria": json.dumps(accept.get("acceptance_criteria")),
+            })
+
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+    # Confirm compilation
+    return await _confirm_compilation(rfp_id, role, db)

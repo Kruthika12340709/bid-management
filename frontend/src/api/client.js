@@ -107,6 +107,7 @@ export const inputsApi = {
   list:               ()              => client.get('/inputs/').then(r => r.data),
   requestMissing:     (rfpId, cat)    => client.post(`/inputs/${rfpId}/request-missing/${encodeURIComponent(cat)}`).then(r => r.data),
   confirmCompilation: (rfpId)         => client.post(`/inputs/${rfpId}/confirm-compilation`).then(r => r.data),
+  createFromJson:     (data)          => client.post('/inputs/create-from-json', data).then(r => r.data),
 };
 
 export const documentsApi = {

@@ -606,7 +606,7 @@ function SectionContent({ sectionKey, compiledData, edits, editingField, draft, 
   }
 
   if (sectionKey === 'deliverables') {
-    const items = compiledData || [];
+    const items = (compiledData && compiledData.items) || compiledData || [];
     return (
       <table className="dt">
         <thead><tr><th>ID</th><th>Deliverable</th><th>Description</th><th>Format</th><th>Acceptance</th><th>Responsible</th></tr></thead>

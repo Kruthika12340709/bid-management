@@ -222,6 +222,211 @@ async def compute_schedule(db: AsyncSession, rfp_id: str, start_date: date) -> O
     }
 
 
+async def compute_pricing(db: AsyncSession, rfp_id: str) -> Optional[dict]:
+    row = (await db.execute(text("""
+        SELECT rate_card, margin_percentage, total_estimated_cost FROM pricing_module
+        WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1
+    """), {"rfp_id": rfp_id})).first()
+    if not row or not row[0]:
+        return None
+
+    rate_card = row[0] or {}
+    lines = []
+    if isinstance(rate_card, list):
+        items = rate_card
+    elif isinstance(rate_card, dict):
+        items = [rate_card]
+    else:
+        items = []
+
+    for idx, item in enumerate(items):
+        if isinstance(item, dict):
+            lines.append({
+                "id": item.get("role") or f"L{idx + 1}",
+                "task": item.get("task") or item.get("role") or f"Line {idx + 1}",
+                "role": item.get("role") or "Unknown",
+                "rate": float(item.get("rate", 0) or 0),
+                "hours": int(item.get("hours", 0) or 0),
+                "margin_pct": float(item.get("margin_percentage", row[1] or 0) or 0),
+                "source_ref": f"pricing_module.rate_card#{idx + 1}",
+            })
+    return {
+        "summary": {
+            "total_cost": float(row[2] or 0),
+            "margin_pct": float(row[1] or 0),
+        },
+        "lines": lines,
+        "confidence": 0.78,
+        "flags": [],
+    }
+
+
+async def compute_quality(db: AsyncSession, rfp_id: str) -> Optional[dict]:
+    row = (await db.execute(text("""
+        SELECT metrics, compliance_standards FROM quality_module
+        WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1
+    """), {"rfp_id": rfp_id})).first()
+    if not row or not row[0]:
+        return None
+
+    metrics = row[0] or []
+    standards = row[1] or []
+    out_metrics = []
+    for idx, item in enumerate(metrics):
+        if isinstance(item, dict):
+            out_metrics.append({
+                "metric": item.get("metric") or item.get("name") or f"Metric {idx + 1}",
+                "target": item.get("target") or item.get("goal") or "Meet standard",
+                "measurement": item.get("measurement") or item.get("method") or "Audit",
+                "verification": item.get("verification") or item.get("evidence") or "Document review",
+            })
+        else:
+            out_metrics.append({
+                "metric": str(item),
+                "target": "Meet standard",
+                "measurement": "Audit",
+                "verification": "Document review",
+            })
+    return {
+        "metrics": out_metrics,
+        "standards": standards,
+        "flags": [],
+    }
+
+
+async def compute_deliverables(db: AsyncSession, rfp_id: str) -> Optional[dict]:
+    row = (await db.execute(text("""
+        SELECT deliverables FROM deliverable_module
+        WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1
+    """), {"rfp_id": rfp_id})).first()
+    if not row or not row[0]:
+        return None
+
+    deliverables = row[0] or []
+    out = []
+    for idx, item in enumerate(deliverables):
+        if isinstance(item, dict):
+            out.append({
+                "id": item.get("id") or f"D{idx + 1}",
+                "name": item.get("name") or item.get("deliverable") or f"Deliverable {idx + 1}",
+                "description": item.get("description") or item.get("details") or "",
+                "format": item.get("format") or item.get("type") or "Document",
+                "acceptance": item.get("acceptance") or item.get("acceptance_criteria") or "Sign-off",
+                "responsible": item.get("owner") or item.get("responsible") or "Unknown",
+            })
+        else:
+            out.append({
+                "id": f"D{idx + 1}",
+                "name": str(item),
+                "description": "",
+                "format": "Document",
+                "acceptance": "Sign-off",
+                "responsible": "Unknown",
+            })
+    return {"items": out, "flags": []}
+
+
+async def compute_risks(db: AsyncSession, rfp_id: str) -> Optional[dict]:
+    row = (await db.execute(text("""
+        SELECT risks, risk_summary FROM risk_module
+        WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1
+    """), {"rfp_id": rfp_id})).first()
+    if not row or not row[0]:
+        return None
+
+    risks = row[0] or []
+    out = []
+    for idx, item in enumerate(risks):
+        if isinstance(item, dict):
+            out.append({
+                "id": item.get("risk_id") or item.get("id") or f"R{idx + 1}",
+                "summary": item.get("description") or item.get("risk") or str(item),
+                "impact": item.get("impact") or item.get("severity") or "Medium",
+                "mitigation": item.get("mitigation") or item.get("response") or "TBD",
+                "status": item.get("status") or "open",
+            })
+        else:
+            out.append({
+                "id": f"R{idx + 1}",
+                "summary": str(item),
+                "impact": "Medium",
+                "mitigation": "TBD",
+                "status": "open",
+            })
+    return {"risks": out, "summary": row[1] or "", "flags": []}
+
+
+async def compute_dependencies(db: AsyncSession, rfp_id: str) -> Optional[dict]:
+    row = (await db.execute(text("""
+        SELECT dependencies, dependency_mapping FROM dependency_module
+        WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1
+    """), {"rfp_id": rfp_id})).first()
+    if not row:
+        return None
+
+    deps = row[0] or []
+    mapping = row[1] or []
+    link_map = {}
+    for entry in mapping:
+        dep_name = entry.get("dependency")
+        if dep_name:
+            link_map[dep_name] = entry.get("tasks") or []
+
+    internal = []
+    external = []
+    for item in deps:
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("dependency") or "Dependency"
+            row_item = {
+                "name": name,
+                "linked_task": ", ".join(link_map.get(name, [])),
+                "owner": item.get("owner") or "Unknown",
+                "status": item.get("status") or "confirmed",
+            }
+            if str(item.get("type", "")).lower() == "external":
+                external.append(row_item)
+            else:
+                internal.append(row_item)
+        else:
+            internal.append({
+                "name": str(item),
+                "linked_task": ", ".join(link_map.get(str(item), [])),
+                "owner": "Unknown",
+                "status": "confirmed",
+            })
+    return {"internal": internal, "external": external, "flags": []}
+
+
+async def compute_acceptance(db: AsyncSession, rfp_id: str) -> Optional[dict]:
+    row = (await db.execute(text("""
+        SELECT acceptance_criteria, mapping_to_deliverables FROM acceptance_module
+        WHERE rfp_id = :rfp_id ORDER BY created_at DESC LIMIT 1
+    """), {"rfp_id": rfp_id})).first()
+    if not row or not row[0]:
+        return None
+
+    criteria = row[0] or []
+    out = []
+    for idx, item in enumerate(criteria):
+        if isinstance(item, dict):
+            out.append({
+                "id": item.get("id") or f"AC{idx + 1}",
+                "description": item.get("description") or item.get("criterion") or str(item),
+                "measurement": item.get("measurement") or item.get("measure") or "Review",
+                "verification": item.get("verification") or item.get("verification_method") or "Sign-off",
+                "responsible": item.get("responsible") or "Project Manager",
+            })
+        else:
+            out.append({
+                "id": f"AC{idx + 1}",
+                "description": str(item),
+                "measurement": "Review",
+                "verification": "Sign-off",
+                "responsible": "Project Manager",
+            })
+    return {"criteria": out, "deliverable_mapping": row[1] or {}, "flags": []}
+
+
 def _weeks_for(milestones, start_date):
     """Map a list of milestones to the set of week numbers they cover."""
     weeks = set()
