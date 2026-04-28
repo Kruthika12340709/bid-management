@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker run *)",
+      "Bash(curl -s -g -o /dev/null -w \"  [::1]:8000/mei-aegis/health:    %{http_code}\\\\n\" \"http://[::1]:8000/mei-aegis/health\")",
+      "Bash(curl -s -g -o /dev/null -w \"  [::1]:8000/mei-aegis/bids/:     %{http_code}\\\\n\" \"http://[::1]:8000/mei-aegis/bids/\")",
+      "Bash(curl -s -g -o /dev/null -w \"  [::1]:8000/mei-aegis/api/health: %{http_code}\\\\n\" \"http://[::1]:8000/mei-aegis/api/health\")",
+      "Bash(curl -s -o /dev/null -w \"  localhost:5000/mei-aegis-fe/:   %{http_code}\\\\n\" http://localhost:5000/mei-aegis-fe/)",
+      "Bash(curl -s -o /dev/null -w \"  127.0.0.1:8000/mei-aegis/health: %{http_code}\\\\n\" http://127.0.0.1:8000/mei-aegis/health)",
+      "Bash(docker exec *)",
+      "Bash(curl -s -o /dev/null -w \"  SPA loads:                          %{http_code}\\\\n\" http://localhost:5000/mei-aegis-fe/)",
+      "Bash(curl -s -o /dev/null -w \"  SPA's API target /mei-aegis/health: %{http_code}\\\\n\" http://localhost:8000/mei-aegis/health)",
+      "Bash(curl -s -o /dev/null -w \"  SPA's API target /mei-aegis/bids/:  %{http_code}\\\\n\" http://localhost:8000/mei-aegis/bids/)",
+      "Bash(curl -s http://localhost:8000/mei-aegis/health)",
+      "Bash(git -C /c/Users/User/Desktop/mei-aegis/webapp log --oneline -5)",
+      "Bash(git -C /c/Users/User/Desktop/mei-aegis/webapp diff --stat)",
+      "Bash(git -C /c/Users/User/Desktop/mei-aegis/webapp diff --cached --stat)",
+      "Bash(git -C /c/Users/User/Desktop/mei-aegis/webapp status -uall)"
+    ]
+  }
+}

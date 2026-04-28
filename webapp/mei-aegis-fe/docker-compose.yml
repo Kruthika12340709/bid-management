@@ -1,0 +1,13 @@
+services:
+  frontend:
+    build:
+      context: .
+    container_name: bid-frontend
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+    extra_hosts:
+      # Lets nginx reach the backend running on the host machine.
+      # Docker Desktop on Windows/Mac maps host.docker.internal automatically;
+      # this entry is for Linux compatibility.
+      - "host.docker.internal:host-gateway"

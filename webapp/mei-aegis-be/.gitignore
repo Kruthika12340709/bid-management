@@ -1,0 +1,53 @@
+# 🔐 Environment variables
+.env
+.env.*
+
+# 🐍 Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 📦 Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# 🧪 Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 🧾 Logs
+*.log
+
+# 🧠 IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 🐳 Docker
+docker-compose.override.yml
+
+# 🗃️ OS files
+.DS_Store
+Thumbs.db
+
+# 📂 Build / distribution
+build/
+dist/
+*.egg-info/
+
+# 🔑 Secrets / keys
+*.pem
+*.key
+*.crt
+
+# 📊 Database files (if local)
+*.db
+*.sqlite3
+
+# 📥 Temporary files
+tmp/
+temp/
