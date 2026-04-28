@@ -27,15 +27,12 @@ def _build_database_url() -> str:
         for chunk in con.strip().strip('"').split():
             if "=" in chunk:
                 k, v = chunk.split("=", 1)
-                v = v.strip().strip("'").strip('"')
-                kv[k.strip()] = v
+                kv[k.strip()] = v.strip()
 
-        # libpq uses 'sslmode'; asyncpg uses 'ssl'. Azure Postgres requires SSL,
-        # so default to 'require' when the caller hasn't specified one — otherwise
-        # the server rejects the connection with a pg_hba "no encryption" error.
-        sslmode = kv.pop("sslmode", "require")
+        # libpq uses 'sslmode'; asyncpg uses 'ssl'
+        sslmode = kv.pop("sslmode", None)
         query = {}
-        if sslmode.lower() != "disable":
+        if sslmode and sslmode.lower() != "disable":
             query["ssl"] = sslmode
 
         url = URL.create(

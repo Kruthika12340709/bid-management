@@ -554,6 +554,13 @@ async def create_from_json(payload: CreateFromJsonPayload,
         "pricing_module": ["rate_card"],
         "acceptance_module": ["acceptance_criteria"],
     }
+    
+    # resource_module is optional but needed for roles
+    if "resource_module" in modules:
+        if not isinstance(modules["resource_module"], dict):
+            raise HTTPException(status_code=400, detail="resource_module must be object")
+        if "task_allocation" not in modules["resource_module"]:
+            raise HTTPException(status_code=400, detail="Missing task_allocation in resource_module")
 
     for mod, fields in required_fields.items():
         if mod not in modules:
@@ -566,6 +573,15 @@ async def create_from_json(payload: CreateFromJsonPayload,
                 raise HTTPException(status_code=400, detail=f"Missing {field} in {mod}")
 
     try:
+        # Sync sequences to avoid UniqueViolationError from manually seeded data
+        for t_name, pk_col in [
+            ("solution_module", "solution_id"), ("resource_module", "resource_id"),
+            ("pricing_module", "pricing_id"), ("quality_module", "quality_id"),
+            ("deliverable_module", "deliverable_id"), ("risk_module", "risk_id"),
+            ("dependency_module", "dependency_id"), ("acceptance_module", "acceptance_id")
+        ]:
+            await db.execute(text(f"SELECT setval('mei.{t_name}_{pk_col}_seq', COALESCE((SELECT MAX({pk_col}) FROM mei.{t_name}), 1))"))
+
         # Insert rfp_module
         await db.execute(text(
             "INSERT INTO rfp_module (rfp_id, client_name, title, deadline) "
@@ -664,6 +680,17 @@ async def create_from_json(payload: CreateFromJsonPayload,
             ), {
                 "rfp_id": rfp_id,
                 "acceptance_criteria": json.dumps(accept.get("acceptance_criteria")),
+            })
+
+        # Insert resource_module (optional, for roles)
+        if "resource_module" in modules:
+            res_mod = modules["resource_module"]
+            await db.execute(text(
+                "INSERT INTO resource_module (rfp_id, task_allocation) "
+                "VALUES (:rfp_id, :task_allocation)"
+            ), {
+                "rfp_id": rfp_id,
+                "task_allocation": json.dumps(res_mod.get("task_allocation")),
             })
 
         await db.commit()

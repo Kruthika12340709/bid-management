@@ -1,11 +1,7 @@
 // Tiny fetch-based HTTP client, axios-compatible enough for our call sites.
 // No third-party deps — just the browser's native fetch API.
 
-// Path-based routing convention: backend lives under /<agent-name>/...
-// VITE_API_URL is inlined at build time (see Dockerfile). When unset (e.g.
-// `npm run dev`) we fall back to the relative agent prefix and let the Vite
-// proxy forward it to the FastAPI backend.
-const BASE_URL = import.meta.env.VITE_API_URL || '/mei-aegis';
+const BASE_URL = '/api';
 const TIMEOUT = 15000;
 
 // Active role — set by Desktop.jsx whenever the user switches via the avatar
@@ -117,7 +113,7 @@ export const inputsApi = {
 export const documentsApi = {
   listTemplates: () => client.get('/documents/templates').then(r => r.data),
   renderHtml: (ref) => client.get(`/documents/bids/${ref}/document`, { responseType: 'text' }).then(r => r.data),
-  url: (ref) => `${BASE_URL}/documents/bids/${ref}/document?format=html`,
+  url: (ref) => `/api/documents/bids/${ref}/document?format=html`,
 };
 
 export const reportsApi = {

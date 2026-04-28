@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import html2pdf from 'html2pdf.js';
+import companyLogo from './image.png';
 import { Icon } from '../components/ui/Icon';
 import { fmtMoney, stageBadge } from '../utils/format';
 import { useBidDetail } from '../hooks/useApiData';
@@ -8,10 +10,11 @@ import { sections as MOCK_SECTIONS, pricingLines, users } from '../utils/adapt';
 const CO_APPROVAL_VALUE_THRESHOLD = 1000000;
 
 export default function BidDetail({ bid: initialBid, user, onBack, defaultSection = 'pricing' }) {
-  const isDirector = user.id === 'director';
+  const isDirector = user.id === 'director' || user.role?.includes('Director');
   const { bid, sections, risks, error, refresh } = useBidDetail(initialBid?.id);
 
   const [activeSection,   setActiveSection]   = useState(defaultSection);
+  const printRef = useRef(null);
   const [pendingMargin,   setPendingMargin]   = useState(null);
   const [marginConfirmed, setMarginConfirmed] = useState(false);
   const [edits,           setEdits]           = useState({});
@@ -29,12 +32,14 @@ export default function BidDetail({ bid: initialBid, user, onBack, defaultSectio
   const allApproved   = approvedCount === 8;
   const margin        = pendingMargin ?? Number(bid.currentMargin || bid.margin);
 
-  const totalCost = pricingLines.reduce((s, l) => s + l.rate * l.hours, 0);
-  const totalBid  = pricingLines.reduce((s, l) => {
-    const isPipelineOrML = l.task.includes('Pipeline Build — Transformation') || l.task.includes('ML');
-    const useM = isPipelineOrML ? margin : l.margin;
-    return s + l.rate * l.hours * (1 + useM / 100);
+  const totalCost = (pricingLines || []).reduce((s, l) => s + (l.rate || 0) * (l.hours || 0), 0);
+  const totalBid  = (pricingLines || []).reduce((s, l) => {
+    const isPipelineOrML = l.task?.includes('Pipeline Build — Transformation') || l.task?.includes('ML');
+    const useM = isPipelineOrML ? margin : (l.margin || 0);
+    return s + (l.rate || 0) * (l.hours || 0) * (1 + useM / 100);
   }, 0);
+
+  const marginVal = totalCost > 0 ? ((totalBid / totalCost - 1) * 100).toFixed(1) : '0.0';
 
   const highRiskCount      = (risks || []).filter(r => r.severity === 'High').length;
   const coApprovalRequired = bid.value > CO_APPROVAL_VALUE_THRESHOLD || highRiskCount >= 2;
@@ -64,7 +69,7 @@ export default function BidDetail({ bid: initialBid, user, onBack, defaultSectio
     finally { setBusy(false); }
   }
 
-  async function editAndApprove(key, fieldKey, original, revised) {
+  async function onEdit(key, fieldKey, original, revised) {
     setBusy(true);
     try {
       await hilApi.editSection(bid.id, key, {
@@ -132,6 +137,27 @@ export default function BidDetail({ bid: initialBid, user, onBack, defaultSectio
     finally { setBusy(false); }
   }
 
+  async function exportToPdf() {
+    if (!printRef.current) return;
+    setToast('Generating PDF...');
+    const element = printRef.current;
+    
+    const opt = {
+      margin:       10,
+      filename:     `Bid-${bid.id}-Approved.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true, logging: false },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    
+    html2pdf().from(element).set(opt).save().then(() => {
+      setToast('PDF exported successfully');
+    }).catch(err => {
+      console.error('PDF Export Error:', err);
+      setToast('Error exporting PDF');
+    });
+  }
+
   const section = MOCK_SECTIONS.find(s => s.id === activeSection);
 
   return (
@@ -158,6 +184,11 @@ export default function BidDetail({ bid: initialBid, user, onBack, defaultSectio
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
+            {allApproved && (
+              <button className="btn btn-outline" disabled={busy} onClick={exportToPdf} title="Export Approved Sections to PDF">
+                {Icon.doc(12)} Export PDF
+              </button>
+            )}
             {bid.stage === 'pending' && isDirector && readyForFinal &&
               <button className="btn btn-success" disabled={busy} onClick={signOff}>{Icon.check(12)} Sign-off & route to Manager</button>}
             {bid.stage === 'pending' && isDirector && !readyForFinal &&
@@ -271,6 +302,9 @@ export default function BidDetail({ bid: initialBid, user, onBack, defaultSectio
           isDirector={isDirector} totalCost={totalCost} totalBid={totalBid}
           onApprove={() => approveSection('pricing')} onReturn={() => rejectSection('pricing')}
           onApplyOverride={applyMarginOverride}
+          onEdit={(f, o, r) => onEdit('pricing', f, o, r)}
+          edits={edits.pricing || {}}
+          marginVal={marginVal}
           status={sectionStates.pricing} busy={busy}
         />
       )}
@@ -279,6 +313,8 @@ export default function BidDetail({ bid: initialBid, user, onBack, defaultSectio
           risks={risks || []} onAck={ackRisk}
           isDirector={isDirector}
           onApprove={() => approveSection('risks')} onReturn={() => rejectSection('risks')}
+          onEdit={(f, o, r) => onEdit('risks', f, o, r)}
+          edits={edits.risks || {}}
           status={sectionStates.risks} busy={busy}
         />
       )}
@@ -289,49 +325,85 @@ export default function BidDetail({ bid: initialBid, user, onBack, defaultSectio
           status={sectionStates[activeSection]}
           isDirector={isDirector}
           edits={edits[activeSection] || {}}
-          onEdit={(field, original, revised) => editAndApprove(activeSection, field, original, revised)}
+          onEdit={(f, o, r) => onEdit(activeSection, f, o, r)}
           onApprove={() => approveSection(activeSection)}
           onReturn={() => rejectSection(activeSection)}
           busy={busy}
         />
       )}
+
+      {/* Hidden view for PDF generation — off-screen instead of display:none for better capture */}
+      <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: '800px' }}>
+        <div ref={printRef}>
+          <PrintableView bid={bid} sections={sections} risks={risks || []} totalCost={totalCost} totalBid={totalBid} margin={margin} />
+        </div>
+      </div>
     </div>
   );
 }
 
 // ─── controls + sections ────────────────────────────────────────────────────
 
-function ApprovalControls({ status, isDirector, onApprove, onReturn, disabled, disabledReason, busy }) {
-  if (status === 'approved') return <span className="badge badge-success">{Icon.check(10)} Approved</span>;
-  if (status === 'returned') return <span className="badge badge-error">{Icon.flag(10)} Returned to upstream</span>;
+function ApprovalControls({ status, isDirector, onApprove, onReturn, onToggleEdit, isEditing, disabled, disabledReason, busy }) {
   if (!isDirector) return <span className="badge badge-primary">Awaiting Director</span>;
+  
+  if (isEditing) {
+    return (
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button className="btn btn-outline btn-sm" onClick={onToggleEdit}>Cancel</button>
+        <button className="btn btn-primary btn-sm" onClick={onToggleEdit}>Done Editing</button>
+      </div>
+    );
+  }
+
+  const isApproved = status === 'approved';
+  const isReturned = status === 'returned';
+
   return (
-    <div style={{ display: 'flex', gap: 6 }}>
-      <button className="btn btn-outline btn-sm" disabled={busy} onClick={onReturn}>{Icon.flag(10)} Reject & return</button>
-      <button className="btn btn-success btn-sm" disabled={disabled || busy} title={disabled ? disabledReason : ''} onClick={onApprove}>
-        {Icon.check(11)} Approve section
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      {isApproved && <span className="badge badge-success" style={{ marginRight: 8 }}>{Icon.check(10)} Approved</span>}
+      {isReturned && <span className="badge badge-error" style={{ marginRight: 8 }}>{Icon.flag(10)} Returned</span>}
+      
+      <button className="btn btn-ghost btn-sm" style={{ color: '#5929d0', fontWeight: 600 }} onClick={onToggleEdit}>
+        {Icon.edit(10)} {isApproved ? 'Edit approved section' : 'Edit section'}
       </button>
+
+      {!isApproved && (
+        <>
+          <button className="btn btn-outline btn-sm" disabled={busy} onClick={onReturn}>{Icon.flag(10)} Reject</button>
+          <button className="btn btn-success btn-sm" disabled={disabled || busy} title={disabled ? disabledReason : ''} onClick={onApprove}>
+            {Icon.check(11)} Approve
+          </button>
+        </>
+      )}
     </div>
   );
 }
 
-function PricingSection({ bid, margin, pendingMargin, setPendingMargin, marginConfirmed, setMarginConfirmed, isDirector, totalCost, totalBid, onApprove, onReturn, onApplyOverride, status, busy }) {
+function PricingSection({ bid, margin, pendingMargin, setPendingMargin, marginConfirmed, setMarginConfirmed, isDirector, totalCost, totalBid, marginVal, onApprove, onReturn, onApplyOverride, onEdit, edits, status, busy }) {
+  const [isEditing, setIsEditing] = useState(false);
+
   return (
     <div>
       <div className="card mb-16">
         <div className="card-header">
           <div>
             <div className="card-title">{Icon.pound(14)} Pricing Review · {bid.currency}</div>
-            <div className="card-sub">Rate card applied · {pricingLines.length} lines · margin overrides logged per BR-003</div>
+            <div className="card-sub">Rate card applied · {pricingLines.length} lines</div>
           </div>
-          <ApprovalControls status={status} isDirector={isDirector} onApprove={onApprove} onReturn={onReturn} busy={busy} />
+          <ApprovalControls 
+            status={status} isDirector={isDirector} 
+            onApprove={onApprove} onReturn={onReturn} 
+            isEditing={isEditing} onToggleEdit={() => setIsEditing(!isEditing)}
+            busy={busy} 
+          />
         </div>
         <div className="card-pad" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
-          <div className="kpi k-cyan" style={{ margin: 0 }}><div className="kpi-label">Total Cost</div><div className="kpi-value">{fmtMoney(totalCost, bid.currency)}</div><div className="kpi-meta">12 tasks · 4 roles · 676h</div></div>
-          <div className="kpi" style={{ margin: 0 }}><div className="kpi-label">Bid Price</div><div className="kpi-value">{fmtMoney(totalBid, bid.currency)}</div><div className="kpi-meta">After margin · {bid.currency}</div></div>
-          <div className="kpi k-pink" style={{ margin: 0 }}><div className="kpi-label">Effective Margin</div><div className="kpi-value">{((totalBid / totalCost - 1) * 100).toFixed(1)}%</div></div>
+          <div className="kpi k-cyan" style={{ margin: 0 }}><div className="kpi-label">Total Cost</div><div className="kpi-value">{fmtMoney(totalCost, bid.currency)}</div></div>
+          <div className="kpi" style={{ margin: 0 }}><div className="kpi-label">Bid Price</div><div className="kpi-value">{fmtMoney(totalBid, bid.currency)}</div></div>
+          <div className="kpi k-pink" style={{ margin: 0 }}><div className="kpi-label">Effective Margin</div><div className="kpi-value">{marginVal}%</div></div>
         </div>
-        {isDirector && (
+        {isDirector && isEditing && (
           <div style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', background: '#FAFBFD', display: 'flex', alignItems: 'center', gap: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Adjust margin (Pipeline Build & ML lines)</div>
             <input type="range" min="18" max="32" step="1"
@@ -341,13 +413,11 @@ function PricingSection({ bid, margin, pendingMargin, setPendingMargin, marginCo
             <div style={{ fontSize: 14, fontWeight: 700, color: '#5929d0', minWidth: 50, textAlign: 'right' }}>{pendingMargin ?? margin}%</div>
             {pendingMargin !== null && pendingMargin !== margin &&
               <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setMarginConfirmed('asking')}>Apply override</button>}
-            {marginConfirmed === true &&
-              <span className="badge badge-success" style={{ fontSize: 10 }}>{Icon.check(10)} Override logged</span>}
           </div>
         )}
       </div>
       <div className="card">
-        <div className="card-header"><div className="card-title">Line items</div><div className="card-sub">{pricingLines.length} lines</div></div>
+        <div className="card-header"><div className="card-title">Line items</div></div>
         <table className="dt" style={{ borderRadius: 0, border: 'none' }}>
           <thead><tr><th>Task</th><th>Role</th><th className="num">Rate</th><th className="num">Hours</th><th className="num">Margin</th><th className="num">Subtotal</th></tr></thead>
           <tbody>
@@ -355,25 +425,40 @@ function PricingSection({ bid, margin, pendingMargin, setPendingMargin, marginCo
               const overridden = (l.task.includes('Pipeline Build — Transformation') || l.task.includes('ML')) && margin !== bid.margin;
               const useM = overridden ? margin : l.margin;
               const subtotal = l.rate * l.hours * (1 + useM / 100);
+              const rowKey = `line-${i}`;
+              
               return (
                 <tr key={i}>
-                  <td><strong>{l.task}</strong></td>
+                  <td>
+                    {isEditing ? (
+                      <input className="input-inline" defaultValue={l.task} onBlur={e => onEdit(`${rowKey}.task`, l.task, e.target.value)} />
+                    ) : (
+                      <strong>{edits[`${rowKey}.task`]?.revised || l.task}</strong>
+                    )}
+                  </td>
                   <td>{l.role}</td>
-                  <td className="num">£{l.rate.toLocaleString()}</td>
-                  <td className="num">{l.hours}</td>
-                  <td className="num">{useM}% {overridden && <span className="badge badge-pink" style={{ fontSize: 9, marginLeft: 4 }}>O</span>}</td>
+                  <td className="num">
+                    {isEditing ? (
+                      <input className="input-inline num" style={{ width: 60 }} defaultValue={l.rate} onBlur={e => onEdit(`${rowKey}.rate`, l.rate.toString(), e.target.value)} />
+                    ) : (
+                      `£${(edits[`${rowKey}.rate`]?.revised || l.rate).toLocaleString()}`
+                    )}
+                  </td>
+                  <td className="num">
+                    {isEditing ? (
+                      <input className="input-inline num" style={{ width: 50 }} defaultValue={l.hours} onBlur={e => onEdit(`${rowKey}.hours`, l.hours.toString(), e.target.value)} />
+                    ) : (
+                      edits[`${rowKey}.hours`]?.revised || l.hours
+                    )}
+                  </td>
+                  <td className="num">{useM}%</td>
                   <td className="num"><strong>£{Math.round(subtotal).toLocaleString()}</strong></td>
                 </tr>
               );
             })}
-            <tr style={{ background: '#FAFBFD', fontWeight: 700 }}>
-              <td colSpan="5" style={{ textAlign: 'right' }}>Bid Total</td>
-              <td className="num"><strong style={{ color: '#5929d0' }}>£{Math.round(totalBid).toLocaleString()}</strong></td>
-            </tr>
           </tbody>
         </table>
       </div>
-
       {marginConfirmed === 'asking' && (
         <ModalOverride
           oldMargin={bid.margin} newMargin={pendingMargin}
@@ -412,53 +497,57 @@ function ModalOverride({ oldMargin, newMargin, target, onConfirm, onCancel }) {
   );
 }
 
-function RisksSection({ risks, onAck, isDirector, onApprove, onReturn, status, busy }) {
+function RisksSection({ risks, onAck, isDirector, onApprove, onReturn, onEdit, edits, status, busy }) {
+  const [isEditing, setIsEditing] = useState(false);
+
   const high = risks.filter(r => r.severity === 'High');
   const allHighAcked = high.every(r => r.acknowledged);
   const blockedReason = !allHighAcked ? `Acknowledge ${high.length} High-severity risks first (BR-005)` : '';
+  
   return (
     <div>
       <div className="card mb-16">
         <div className="card-header">
           <div>
-            <div className="card-title">{Icon.alert(14)} Risk Register · {risks.length} risks · {high.length} High-rated</div>
-            <div className="card-sub">High-severity risks require explicit Bid Director acknowledgement (BR-005)</div>
+            <div className="card-title">{Icon.alert(14)} Risk Register · {risks.length} risks</div>
           </div>
           <ApprovalControls
             status={status} isDirector={isDirector}
             onApprove={onApprove} onReturn={onReturn}
+            isEditing={isEditing} onToggleEdit={() => setIsEditing(!isEditing)}
             disabled={!allHighAcked} disabledReason={blockedReason} busy={busy}
           />
         </div>
         <div style={{ padding: '14px 20px' }}>
           {risks.length === 0 ? (
-            <div style={{ color: '#94A3B8', textAlign: 'center', padding: 20 }}>No risks recorded for this bid</div>
+            <div style={{ color: '#94A3B8', textAlign: 'center', padding: 20 }}>No risks recorded</div>
           ) : (
             <table className="dt">
-              <thead><tr><th>ID</th><th>Risk</th><th>Cat</th><th>P</th><th>I</th><th>Sev</th><th>Mitigation</th><th>Owner</th><th>Ack</th></tr></thead>
+              <thead><tr><th>Risk</th><th>Severity</th><th>Mitigation</th><th>Ack</th></tr></thead>
               <tbody>
-                {risks.map(r => {
-                  const acked = r.acknowledged;
-                  return (
-                    <tr key={r.risk_id} style={{ background: r.severity === 'High' && !acked ? '#FEF2F2' : 'transparent' }}>
-                      <td><strong>{r.risk_ref}</strong></td>
-                      <td style={{ maxWidth: 240, lineHeight: 1.4 }}>{r.description}</td>
-                      <td><span className="badge badge-neutral" style={{ fontSize: 10 }}>{r.category}</span></td>
-                      <td>{r.probability}</td><td>{r.impact}</td>
-                      <td><span className={`badge ${r.severity === 'High' ? 'badge-error' : r.severity === 'Medium' ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: 10 }}>{r.severity}</span></td>
-                      <td style={{ maxWidth: 220, fontSize: 11.5, color: '#475569' }}>{r.mitigation}</td>
-                      <td>{!r.owner ? <span className="badge badge-error" style={{ fontSize: 10 }}>missing</span> : r.owner}</td>
-                      <td>
-                        {r.severity !== 'High' ? <span className="muted" style={{ fontSize: 11 }}>—</span>
-                          : acked
-                            ? <span className="badge badge-success" style={{ fontSize: 10 }}>{Icon.check(9)} ack</span>
-                            : isDirector
-                              ? <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => onAck(r.risk_ref)}>ack</button>
-                              : <span className="badge badge-warning" style={{ fontSize: 10 }}>req</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {risks.map(r => (
+                  <tr key={r.risk_id}>
+                    <td style={{ maxWidth: 240 }}>
+                      {isEditing ? (
+                        <input className="input-inline" defaultValue={r.description} onBlur={e => onEdit(`${r.risk_id}.description`, r.description, e.target.value)} />
+                      ) : (
+                        edits[`${r.risk_id}.description`]?.revised || r.description
+                      )}
+                    </td>
+                    <td><span className={`badge ${r.severity === 'High' ? 'badge-error' : 'badge-warning'}`} style={{ fontSize: 10 }}>{r.severity}</span></td>
+                    <td>
+                      {isEditing ? (
+                        <input className="input-inline" defaultValue={r.mitigation} onBlur={e => onEdit(`${r.risk_id}.mitigation`, r.mitigation, e.target.value)} />
+                      ) : (
+                        edits[`${r.risk_id}.mitigation`]?.revised || r.mitigation
+                      )}
+                    </td>
+                    <td>
+                      {r.severity === 'High' && !r.acknowledged && isDirector && !isEditing &&
+                        <button className="btn btn-outline btn-sm" onClick={() => onAck(r.risk_ref)}>ack</button>}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
@@ -468,115 +557,68 @@ function RisksSection({ risks, onAck, isDirector, onApprove, onReturn, status, b
   );
 }
 
-function GenericSection({ section, apiSection, status, isDirector, edits, onEdit, onApprove, onReturn, busy }) {
-  const [editingField, setEditingField] = useState(null);
-  const [draft, setDraft] = useState('');
-
-  function startEdit(field, currentValue) { setEditingField(field); setDraft(currentValue); }
-  function saveEdit(field, original) {
-    if (draft !== original) onEdit(field, original, draft);
-    setEditingField(null);
-  }
-
-  const compiledData = apiSection?.compiled_data;
-  const sourceLabel  = apiSection ? `Source: ${apiSection.source_module} · v${apiSection.input_version} · Confidence ${apiSection.confidence_score || '—'}` : section?.sub;
+function GenericSection({ section, apiSection, status, isDirector, onApprove, onReturn, onEdit, edits, busy }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const compiledData = apiSection?.compiled_data || {};
+  const sectionKey = apiSection?.section_key || section?.id;
+  const sourceLabel = apiSection ? `Source: ${apiSection.source_module} · Confidence ${apiSection.confidence?.toFixed(3) || '—'}` : section?.sub;
 
   return (
-    <div className="card">
+    <div className="card mb-16">
       <div className="card-header">
         <div>
           <div className="card-title">{section?.name || apiSection?.section_name || 'Section'}</div>
           <div className="card-sub">{sourceLabel}</div>
         </div>
-        <ApprovalControls status={status} isDirector={isDirector} onApprove={onApprove} onReturn={onReturn} busy={busy} />
+        <ApprovalControls 
+          status={status} isDirector={isDirector} 
+          onApprove={onApprove} onReturn={onReturn} 
+          isEditing={isEditing} onToggleEdit={() => setIsEditing(!isEditing)}
+          busy={busy} 
+        />
       </div>
       <div className="card-pad">
-        {status === 'flagged' && (
-          <div className="flag-row" style={{ marginBottom: 14 }}>
-            {Icon.flag(13)} Section has open flags from upstream compilation. Edit-and-approve, or reject to return upstream.
-          </div>
-        )}
-        <SectionContent
-          sectionKey={section?.id || apiSection?.section_key}
-          compiledData={compiledData}
-          edits={edits}
-          editingField={editingField} draft={draft} setDraft={setDraft}
-          isDirector={isDirector && status !== 'approved' && status !== 'returned'}
-          onStartEdit={startEdit} onSaveEdit={saveEdit} onCancelEdit={() => setEditingField(null)}
+        <SectionContent 
+          sectionKey={sectionKey} compiledData={compiledData} 
+          edits={edits} isDirector={isDirector} 
+          isEditing={isEditing} onEdit={onEdit}
         />
       </div>
     </div>
   );
 }
 
-function EditableField({ fieldKey, original, edit, isDirector, editing, draft, setDraft, onStart, onSave, onCancel }) {
-  const revised = edit?.revised;
-  if (editing) {
-    return (
-      <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-        <input value={draft} onChange={e => setDraft(e.target.value)}
-          style={{ padding: '3px 8px', border: '1px solid #5929d0', borderRadius: 4, fontSize: 12, minWidth: 100 }} />
-        <button className="btn btn-success btn-sm" onClick={() => onSave(original)} style={{ padding: '3px 8px', fontSize: 10 }}>save</button>
-        <button className="btn btn-ghost btn-sm" onClick={onCancel} style={{ padding: '3px 8px', fontSize: 10 }}>cancel</button>
-      </span>
-    );
-  }
-  if (revised !== undefined && revised !== original) {
-    return (
-      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-        <span style={{ textDecoration: 'line-through', color: '#94A3B8' }}>{edit.original}</span>
-        <span style={{ background: '#DCFCE7', color: '#15803D', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>{revised}</span>
-        {isDirector && <button className="btn btn-ghost btn-sm" onClick={() => onStart(fieldKey, revised)} style={{ padding: '2px 6px', fontSize: 10 }}>edit</button>}
-      </span>
-    );
-  }
-  return (
-    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-      {original}
-      {isDirector && <button className="btn btn-ghost btn-sm" onClick={() => onStart(fieldKey, original)} style={{ padding: '2px 6px', fontSize: 10, color: '#94A3B8' }}>edit</button>}
-    </span>
-  );
-}
-
-function SectionContent({ sectionKey, compiledData, edits, editingField, draft, setDraft, isDirector, onStartEdit, onSaveEdit, onCancelEdit }) {
-  const fp = (k) => ({
-    fieldKey: k, edit: edits[k], isDirector,
-    editing: editingField === k, draft, setDraft,
-    onStart: onStartEdit, onSave: onSaveEdit, onCancel: onCancelEdit,
-  });
-
+function SectionContent({ sectionKey, compiledData, edits, isDirector, isEditing, onEdit }) {
   if (!compiledData) {
-    return <div style={{ color: '#94A3B8', padding: 20, textAlign: 'center' }}>No compiled data yet for this section.</div>;
+    return <div style={{ color: '#94A3B8', padding: 20, textAlign: 'center' }}>No compiled data yet.</div>;
   }
 
   if (sectionKey === 'effort') {
     const rows = compiledData.tasks || [];
-    const summary = compiledData.summary || {};
     return (
       <table className="dt">
-        <thead><tr><th>Task</th><th>Description</th><th>Role</th><th className="num">Hours</th><th className="num">Confidence</th><th>Source</th></tr></thead>
+        <thead><tr><th>Task</th><th>Role</th><th className="num">Hours</th><th className="num">Confidence</th></tr></thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i} style={{ background: r.confidence < 0.65 ? '#FFFBEB' : 'transparent' }}>
-              <td><strong>{r.id}</strong></td>
-              <td>{r.name}</td>
-              <td>{r.role}</td>
-              <td className="num"><EditableField {...fp(`${r.id}.hours`)} original={`${r.hours}h`} /></td>
-              <td className="num">
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  {r.confidence.toFixed(2)}
-                  {r.confidence < 0.65 && <span className="badge badge-warning" style={{ fontSize: 9 }}>{Icon.flag(8)} low</span>}
-                </span>
+            <tr key={i}>
+              <td>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={r.name} onBlur={e => onEdit(`${r.id}.name`, r.name, e.target.value)} />
+                ) : (
+                  <strong>{edits[`${r.id}.name`]?.revised || r.name}</strong>
+                )}
               </td>
-              <td style={{ fontSize: 10.5, color: '#94A3B8', fontFamily: 'ui-monospace, monospace' }}>{r.source_ref || '—'}</td>
+              <td>{r.role}</td>
+              <td className="num">
+                {isEditing ? (
+                  <input className="input-inline num" style={{ width: 50 }} defaultValue={r.hours} onBlur={e => onEdit(`${r.id}.hours`, `${r.hours}h`, e.target.value)} />
+                ) : (
+                  edits[`${r.id}.hours`]?.revised || `${r.hours}h`
+                )}
+              </td>
+              <td className="num">{(r.confidence || 0).toFixed(2)}</td>
             </tr>
           ))}
-          <tr style={{ background: '#FAFBFD', fontWeight: 700 }}>
-            <td colSpan="3" style={{ textAlign: 'right' }}>Total</td>
-            <td className="num">{summary.total_hours || rows.reduce((s, r) => s + r.hours, 0)}h</td>
-            <td className="num">avg {summary.avg_confidence?.toFixed(2) || '—'}</td>
-            <td></td>
-          </tr>
         </tbody>
       </table>
     );
@@ -587,52 +629,57 @@ function SectionContent({ sectionKey, compiledData, edits, editingField, draft, 
       ...p, color: ['#5929d0', '#22D3EE', '#CF008B', '#16A34A'][i % 4],
     }));
     const totalWeeks = compiledData.duration_weeks || 14;
-    const conflicts  = compiledData.conflicts || [];
     const milestones = compiledData.milestones || [];
     return (
       <div>
-        {conflicts.map((c, i) => (
-          <div key={i} className="flag-row" style={{ marginBottom: 14 }}>
-            {Icon.alert(13)} {c.description} (week {c.week})
-          </div>
-        ))}
-
-        {/* Gantt visual */}
         <div style={{ display: 'grid', gridTemplateColumns: `140px repeat(${totalWeeks}, 1fr)`, gap: 4, alignItems: 'center', fontSize: 11, marginBottom: 18 }}>
           <div style={{ fontWeight: 600, color: '#94A3B8' }}>Phase</div>
           {Array.from({ length: totalWeeks }, (_, i) => <div key={i} style={{ textAlign: 'center', color: '#94A3B8', fontSize: 9.5 }}>W{i + 1}</div>)}
           {phases.map((p, pi) => (
             <React.Fragment key={pi}>
-              <div style={{ fontWeight: 600, fontSize: 12 }}>{p.name}</div>
-              {Array.from({ length: totalWeeks }, (_, i) => {
-                const hasConflict = conflicts.some(c => c.week === i + 1) && p.weeks.includes(i + 1);
-                return (
-                  <div key={i} style={{ height: 24, background: p.weeks.includes(i + 1) ? p.color : '#F1F5F9', borderRadius: 4, position: 'relative' }}>
-                    {hasConflict && <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11 }}>!</span>}
-                  </div>
-                );
-              })}
+              <div style={{ fontWeight: 600, fontSize: 12 }}>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={p.name} onBlur={e => onEdit(`phase-${pi}.name`, p.name, e.target.value)} />
+                ) : (
+                  edits[`phase-${pi}.name`]?.revised || p.name
+                )}
+              </div>
+              {Array.from({ length: totalWeeks }, (_, i) => (
+                <div key={i} style={{ height: 24, background: p.weeks.includes(i + 1) ? p.color : '#F1F5F9', borderRadius: 4 }} />
+              ))}
             </React.Fragment>
           ))}
         </div>
-
-        {/* Milestones — MVP §6.2: name, start, end, predecessor, role, mode */}
         {milestones.length > 0 && (
           <>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Milestones</div>
             <table className="dt">
-              <thead>
-                <tr><th>Milestone</th><th>Start</th><th>End</th><th>Predecessor</th><th>Role</th><th>Mode</th></tr>
-              </thead>
+              <thead><tr><th>Milestone</th><th>Start</th><th>End</th><th>Role</th></tr></thead>
               <tbody>
                 {milestones.map((m, i) => (
                   <tr key={i}>
-                    <td><strong>{m.name}</strong></td>
-                    <td><EditableField {...fp(`MS-${i + 1}.start`)} original={m.start_date} /></td>
-                    <td><EditableField {...fp(`MS-${i + 1}.end`)} original={m.end_date} /></td>
-                    <td style={{ fontSize: 11, color: '#475569' }}>{m.predecessor || '—'}</td>
+                    <td>
+                      {isEditing ? (
+                        <input className="input-inline" defaultValue={m.name} onBlur={e => onEdit(`MS-${i + 1}.name`, m.name, e.target.value)} />
+                      ) : (
+                        <strong>{edits[`MS-${i + 1}.name`]?.revised || m.name}</strong>
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <input className="input-inline" defaultValue={m.start_date} onBlur={e => onEdit(`MS-${i + 1}.start`, m.start_date, e.target.value)} />
+                      ) : (
+                        edits[`MS-${i + 1}.start`]?.revised || m.start_date
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <input className="input-inline" defaultValue={m.end_date} onBlur={e => onEdit(`MS-${i + 1}.end`, m.end_date, e.target.value)} />
+                      ) : (
+                        edits[`MS-${i + 1}.end`]?.revised || m.end_date
+                      )}
+                    </td>
                     <td>{m.role}</td>
-                    <td><span className="badge badge-neutral" style={{ fontSize: 10 }}>{m.mode}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -647,15 +694,24 @@ function SectionContent({ sectionKey, compiledData, edits, editingField, draft, 
     const items = (compiledData && compiledData.items) || compiledData || [];
     return (
       <table className="dt">
-        <thead><tr><th>ID</th><th>Deliverable</th><th>Description</th><th>Format</th><th>Acceptance</th><th>Responsible</th></tr></thead>
+        <thead><tr><th>Deliverable</th><th>Acceptance</th><th>Responsible</th></tr></thead>
         <tbody>
           {items.map((d, i) => (
             <tr key={i}>
-              <td><strong>{d.id}</strong></td>
-              <td><EditableField {...fp(`${d.id}.name`)} original={d.name} /></td>
-              <td style={{ fontSize: 11.5, color: '#475569', maxWidth: 260 }}>{d.description || '—'}</td>
-              <td>{d.format}</td>
-              <td><EditableField {...fp(`${d.id}.acceptance`)} original={d.acceptance} /></td>
+              <td>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={d.name} onBlur={e => onEdit(`${d.id}.name`, d.name, e.target.value)} />
+                ) : (
+                  <strong>{edits[`${d.id}.name`]?.revised || d.name}</strong>
+                )}
+              </td>
+              <td>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={d.acceptance} onBlur={e => onEdit(`${d.id}.acceptance`, d.acceptance, e.target.value)} />
+                ) : (
+                  edits[`${d.id}.acceptance`]?.revised || d.acceptance
+                )}
+              </td>
               <td>{d.responsible}</td>
             </tr>
           ))}
@@ -666,98 +722,428 @@ function SectionContent({ sectionKey, compiledData, edits, editingField, draft, 
 
   if (sectionKey === 'acceptance') {
     const items = compiledData.criteria || [];
-    // New schema: array of objects with id/description/measurement/verification/responsible
-    const isStructured = items.length > 0 && typeof items[0] === 'object';
-    if (isStructured) {
-      return (
-        <table className="dt">
-          <thead><tr><th>ID</th><th>Criterion</th><th>Measurement Method</th><th>Verification</th><th>Responsible</th></tr></thead>
-          <tbody>
-            {items.map((c, i) => (
-              <tr key={i}>
-                <td><strong>{c.id}</strong></td>
-                <td><EditableField {...fp(`${c.id}.description`)} original={c.description} /></td>
-                <td style={{ fontSize: 11.5, color: '#475569' }}>{c.measurement || '—'}</td>
-                <td style={{ fontSize: 11.5, color: '#475569' }}>{c.verification || '—'}</td>
-                <td>{c.responsible || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      );
-    }
-    // Fallback for old string-only format
     return (
-      <ol style={{ margin: 0, paddingLeft: 24, fontSize: 13, lineHeight: 1.7, color: '#1E293B' }}>
-        {items.map((t, i) => (
-          <li key={i} style={{ marginBottom: 6 }}>
-            <EditableField {...fp(`AC-${i + 1}`)} original={t} />
-          </li>
-        ))}
-      </ol>
+      <ul style={{ margin: 0, paddingLeft: 20 }}>
+        {items.map((c, i) => {
+          const desc = typeof c === 'object' ? c.description : c;
+          const id = typeof c === 'object' ? c.id : `AC-${i+1}`;
+          return (
+            <li key={i} style={{ marginBottom: 8 }}>
+              {isEditing ? (
+                <input className="input-inline" defaultValue={desc} onBlur={e => onEdit(`${id}.description`, desc, e.target.value)} />
+              ) : (
+                edits[`${id}.description`]?.revised || desc
+              )}
+            </li>
+          );
+        })}
+      </ul>
     );
   }
 
   if (sectionKey === 'quality') {
     return (
-      <div>
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Compliance standards</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {(compiledData.standards || []).map((s, i) => <span key={i} className="badge badge-primary">{s}</span>)}
-          </div>
-        </div>
-        <table className="dt">
-          <thead><tr><th>Metric</th><th>Target</th><th>Measurement</th><th>Verification</th></tr></thead>
-          <tbody>
-            {(compiledData.metrics || []).map((m, i) => (
-              <tr key={i}>
-                <td><strong>{m.metric}</strong></td>
-                <td>{m.target}</td>
-                <td>{m.measurement}</td>
-                <td style={{ fontSize: 11.5, color: '#475569' }}>{m.verification || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <table className="dt">
+        <thead><tr><th>Metric</th><th>Target</th><th>Measurement</th></tr></thead>
+        <tbody>
+          {(compiledData.metrics || []).map((m, i) => (
+            <tr key={i}>
+              <td><strong>{m.metric}</strong></td>
+              <td>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={m.target} onBlur={e => onEdit(`metric-${i}.target`, m.target, e.target.value)} />
+                ) : (
+                  edits[`metric-${i}.target`]?.revised || m.target
+                )}
+              </td>
+              <td>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={m.measurement} onBlur={e => onEdit(`metric-${i}.measurement`, m.measurement, e.target.value)} />
+                ) : (
+                  edits[`metric-${i}.measurement`]?.revised || m.measurement
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     );
   }
 
   if (sectionKey === 'dependencies') {
     return (
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>Internal dependencies</div>
-        <table className="dt" style={{ marginBottom: 16 }}>
-          <thead><tr><th>Name</th><th>Linked Task / Deliverable</th><th>Owner</th><th>Status</th></tr></thead>
-          <tbody>
-            {(compiledData.internal || []).map((d, i) => (
-              <tr key={i}>
-                <td>{d.name}</td>
-                <td style={{ fontSize: 11.5, color: '#5929d0' }}>{d.linked_task || '—'}</td>
-                <td>{d.owner}</td>
-                <td><span className={`badge ${d.status === 'confirmed' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: 10 }}>{d.status}</span></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#0F172A', marginBottom: 6 }}>External dependencies</div>
-        <table className="dt">
-          <thead><tr><th>Name</th><th>Linked Task / Deliverable</th><th>Owner</th><th>Status</th></tr></thead>
-          <tbody>
-            {(compiledData.external || []).map((d, i) => (
-              <tr key={i}>
-                <td>{d.name}</td>
-                <td style={{ fontSize: 11.5, color: '#5929d0' }}>{d.linked_task || '—'}</td>
-                <td>{d.owner}</td>
-                <td><span className={`badge ${d.status === 'confirmed' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: 10 }}>{d.status}</span></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <table className="dt">
+        <thead><tr><th>Name</th><th>Link</th><th>Owner</th></tr></thead>
+        <tbody>
+          {[...(compiledData.internal || []), ...(compiledData.external || [])].map((d, i) => (
+            <tr key={i}>
+              <td>{d.name}</td>
+              <td>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={d.linked_task} onBlur={e => onEdit(`dep-${i}.link`, d.linked_task, e.target.value)} />
+                ) : (
+                  edits[`dep-${i}.link`]?.revised || d.linked_task || '—'
+                )}
+              </td>
+              <td>
+                {isEditing ? (
+                  <input className="input-inline" defaultValue={d.owner} onBlur={e => onEdit(`dep-${i}.owner`, d.owner, e.target.value)} />
+                ) : (
+                  edits[`dep-${i}.owner`]?.revised || d.owner || '—'
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     );
   }
 
-  return <pre style={{ background: '#FAFBFD', padding: 12, borderRadius: 6, fontSize: 11, overflow: 'auto' }}>{JSON.stringify(compiledData, null, 2)}</pre>;
+  return <pre style={{ background: '#F8FAFC', padding: 12, borderRadius: 6, fontSize: 11, overflow: 'auto' }}>{JSON.stringify(compiledData, null, 2)}</pre>;
+}
+
+function PrintableView({ bid, sections, risks, totalCost, totalBid, margin }) {
+  const logoPath = companyLogo;
+  
+  return (
+    <div style={{ color: '#0F172A', fontFamily: "'Inter', -apple-system, sans-serif", backgroundColor: '#FFFFFF' }}>
+      
+      {/* --- COVER PAGE --- */}
+      <div style={{ 
+        height: '1000px', // Force full page height for capture
+        display: 'flex', 
+        flexDirection: 'column', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        textAlign: 'center',
+        padding: '0 80px',
+        pageBreakAfter: 'always',
+        borderBottom: '20px solid #5929d0'
+      }}>
+        <img src={logoPath} alt="Centific Logo" style={{ width: 180, marginBottom: 40 }} />
+        
+        <div style={{ fontSize: 48, fontWeight: 900, letterSpacing: '-0.04em', color: '#0F172A', marginBottom: 12 }}>
+          CENTIFIC
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#64748B', letterSpacing: '0.4em', textTransform: 'uppercase', marginBottom: 80 }}>
+          Strategic Bid Proposal
+        </div>
+
+        <div style={{ width: '100%', height: '2px', background: 'linear-gradient(90deg, transparent, #E2E8F0, transparent)', marginBottom: 60 }}></div>
+
+        <h1 style={{ margin: '0 0 24px 0', fontSize: 32, fontWeight: 800, color: '#0F172A', maxWidth: '600px', lineHeight: 1.2 }}>
+          {bid.title}
+        </h1>
+
+        <div style={{ display: 'flex', gap: 60, marginTop: 40 }}>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 }}>Prepared for</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{bid.client_name || bid.client}</div>
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontSize: 10, color: '#94A3B8', textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 }}>Proposal Reference</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#5929d0' }}>{bid.bid_reference || bid.id}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 100, fontSize: 12, color: '#64748B', fontWeight: 500 }}>
+          Document Date: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+        </div>
+      </div>
+
+      <div style={{ padding: '40px 50px' }}>
+        {/* --- REPEATING HEADER FOR INTERNAL PAGES --- */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40, borderBottom: '1px solid #E2E8F0', paddingBottom: 15 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <img src={logoPath} alt="Logo" style={{ width: 32, height: 32, borderRadius: 6 }} />
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em' }}>CENTIFIC</div>
+          </div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase' }}>
+            {bid.id} | Page Content
+          </div>
+        </div>
+      
+      {sections.map((s, idx) => (
+        <div key={s.section_key} style={{ marginBottom: 40, pageBreakInside: 'avoid' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, borderBottom: '1px solid #E2E8F0', paddingBottom: 10 }}>
+            <div style={{ width: 28, height: 28, background: '#5929d0', color: '#fff', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700 }}>
+              {idx + 1}
+            </div>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#0F172A' }}>{s.section_name}</h2>
+          </div>
+
+          {s.section_key === 'pricing' ? (
+             <div style={{ background: '#F8FAFC', borderRadius: 12, padding: 20 }}>
+               <div style={{ display: 'flex', gap: 40, marginBottom: 24 }}>
+                 <div>
+                   <div style={{ fontSize: 10, color: '#64748B', textTransform: 'uppercase', marginBottom: 4 }}>Total Resource Cost</div>
+                   <div style={{ fontSize: 18, fontWeight: 700, color: '#0F172A' }}>{fmtMoney(totalCost, bid.currency)}</div>
+                 </div>
+                 <div>
+                   <div style={{ fontSize: 10, color: '#64748B', textTransform: 'uppercase', marginBottom: 4 }}>Applied Margin</div>
+                   <div style={{ fontSize: 18, fontWeight: 700, color: '#CF008B' }}>{bid.currentMargin || bid.margin}%</div>
+                 </div>
+                 <div>
+                   <div style={{ fontSize: 10, color: '#64748B', textTransform: 'uppercase', marginBottom: 4 }}>Total Proposal Value</div>
+                   <div style={{ fontSize: 18, fontWeight: 700, color: '#5929d0' }}>{fmtMoney(totalBid, bid.currency)}</div>
+                 </div>
+               </div>
+               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                 <thead>
+                   <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                     <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8 }}>Task</th>
+                     <th style={{ padding: '10px 12px' }}>Role</th>
+                     <th style={{ padding: '10px 12px', textAlign: 'right' }}>Rate</th>
+                     <th style={{ padding: '10px 12px', textAlign: 'right' }}>Hours</th>
+                     <th style={{ padding: '10px 12px', textAlign: 'right', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Subtotal</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {pricingLines.map((l, i) => {
+                     const overridden = (l.task.includes('Pipeline Build — Transformation') || l.task.includes('ML')) && margin !== bid.margin;
+                     const useM = overridden ? margin : l.margin;
+                     const subtotal = l.rate * l.hours * (1 + useM / 100);
+                     return (
+                       <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                         <td style={{ padding: '10px 12px', fontWeight: 600 }}>{l.task}</td>
+                         <td style={{ padding: '10px 12px' }}>{l.role}</td>
+                         <td style={{ padding: '10px 12px', textAlign: 'right' }}>£{l.rate.toLocaleString()}</td>
+                         <td style={{ padding: '10px 12px', textAlign: 'right' }}>{l.hours}</td>
+                         <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700 }}>£{Math.round(subtotal).toLocaleString()}</td>
+                       </tr>
+                     );
+                   })}
+                 </tbody>
+               </table>
+             </div>
+          ) : s.section_key === 'risks' ? (
+             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+               <thead>
+                 <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                   <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8, width: 60 }}>ID</th>
+                   <th style={{ padding: '10px 12px' }}>Risk Description</th>
+                   <th style={{ padding: '10px 12px', width: 80 }}>Severity</th>
+                   <th style={{ padding: '10px 12px', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Mitigation Strategy</th>
+                 </tr>
+               </thead>
+               <tbody>
+                 {risks.map(r => (
+                   <tr key={r.risk_id} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                     <td style={{ padding: '10px 12px', fontWeight: 700 }}>{r.risk_ref}</td>
+                     <td style={{ padding: '10px 12px', lineHeight: 1.4 }}>{r.description}</td>
+                     <td style={{ padding: '10px 12px' }}>
+                        <span style={{ 
+                          padding: '2px 8px', 
+                          borderRadius: 4, 
+                          background: r.severity === 'High' ? '#FEE2E2' : r.severity === 'Medium' ? '#FEF3C7' : '#DCFCE7',
+                          color: r.severity === 'High' ? '#BE123C' : r.severity === 'Medium' ? '#B45309' : '#16A34A',
+                          fontWeight: 700,
+                          fontSize: 9
+                        }}>
+                          {r.severity}
+                        </span>
+                     </td>
+                     <td style={{ padding: '10px 12px', color: '#475569', fontSize: 10.5 }}>{r.mitigation}</td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+          ) : s.section_key === 'effort' ? (
+             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+               <thead>
+                 <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                   <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8, width: 80 }}>Task ID</th>
+                   <th style={{ padding: '10px 12px' }}>Description</th>
+                   <th style={{ padding: '10px 12px' }}>Resource Role</th>
+                   <th style={{ padding: '10px 12px', textAlign: 'right', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Estimated Hours</th>
+                 </tr>
+               </thead>
+               <tbody>
+                 {(s.compiled_data?.tasks || []).map((t, i) => (
+                   <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                     <td style={{ padding: '10px 12px', fontWeight: 700 }}>{t.id}</td>
+                     <td style={{ padding: '10px 12px' }}>{t.name}</td>
+                     <td style={{ padding: '10px 12px' }}>{t.role}</td>
+                     <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600 }}>{t.hours}h</td>
+                   </tr>
+                 ))}
+                 <tr style={{ background: '#F8FAFC', fontWeight: 800 }}>
+                   <td colSpan="3" style={{ padding: '12px', textAlign: 'right', color: '#64748B' }}>TOTAL ESTIMATED EFFORT</td>
+                   <td style={{ padding: '12px', textAlign: 'right', color: '#5929d0', fontSize: 14 }}>
+                    {s.compiled_data?.summary?.total_hours || (s.compiled_data?.tasks || []).reduce((acc, t) => acc + t.hours, 0)}h
+                   </td>
+                 </tr>
+               </tbody>
+             </table>
+          ) : s.section_key === 'schedule' ? (
+             <div>
+               <div style={{ marginBottom: 20, display: 'flex', gap: 12 }}>
+                 <div style={{ background: '#F0F9FF', padding: '8px 16px', borderRadius: 8, border: '1px solid #BAE6FD' }}>
+                    <span style={{ fontSize: 10, color: '#0369A1', textTransform: 'uppercase', fontWeight: 700 }}>Project Duration</span>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#0C4A6E' }}>{s.compiled_data?.duration_weeks || 14} Weeks</div>
+                 </div>
+               </div>
+               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                 <thead>
+                   <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                     <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8 }}>Milestone</th>
+                     <th style={{ padding: '10px 12px' }}>Start Date</th>
+                     <th style={{ padding: '10px 12px' }}>End Date</th>
+                     <th style={{ padding: '10px 12px', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Responsible</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {(s.compiled_data?.milestones || []).map((m, i) => (
+                     <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                       <td style={{ padding: '10px 12px', fontWeight: 700 }}>{m.name}</td>
+                       <td style={{ padding: '10px 12px' }}>{m.start_date ? new Date(m.start_date).toLocaleDateString('en-GB') : '—'}</td>
+                       <td style={{ padding: '10px 12px' }}>{m.end_date ? new Date(m.end_date).toLocaleDateString('en-GB') : '—'}</td>
+                       <td style={{ padding: '10px 12px' }}>{m.role}</td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+          ) : s.section_key === 'deliverables' ? (
+             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+               <thead>
+                 <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                   <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8, width: 60 }}>ID</th>
+                   <th style={{ padding: '10px 12px' }}>Deliverable</th>
+                   <th style={{ padding: '10px 12px' }}>Format</th>
+                   <th style={{ padding: '10px 12px', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Responsible</th>
+                 </tr>
+               </thead>
+               <tbody>
+                 {((s.compiled_data?.items || s.compiled_data) || []).map((d, i) => (
+                   <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                     <td style={{ padding: '10px 12px', fontWeight: 700 }}>{d.id}</td>
+                     <td style={{ padding: '10px 12px' }}>
+                       <div style={{ fontWeight: 600 }}>{d.name}</div>
+                       <div style={{ fontSize: 9, color: '#64748B', marginTop: 2 }}>{d.description}</div>
+                     </td>
+                     <td style={{ padding: '10px 12px' }}>{d.format}</td>
+                     <td style={{ padding: '10px 12px' }}>{d.responsible}</td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+          ) : s.section_key === 'acceptance' ? (
+             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+               <thead>
+                 <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                   <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8, width: 80 }}>Ref</th>
+                   <th style={{ padding: '10px 12px' }}>Acceptance Criterion</th>
+                   <th style={{ padding: '10px 12px' }}>Verification Method</th>
+                   <th style={{ padding: '10px 12px', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Responsible</th>
+                 </tr>
+               </thead>
+               <tbody>
+                 {(s.compiled_data?.criteria || []).map((c, i) => (
+                   <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                     <td style={{ padding: '10px 12px', fontWeight: 700 }}>{c.id || `AC-${i+1}`}</td>
+                     <td style={{ padding: '10px 12px' }}>{c.description || c}</td>
+                     <td style={{ padding: '10px 12px' }}>{c.verification || '—'}</td>
+                     <td style={{ padding: '10px 12px' }}>{c.responsible || '—'}</td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+          ) : s.section_key === 'quality' ? (
+             <div>
+               <div style={{ marginBottom: 16, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                 {(s.compiled_data?.standards || []).map((std, si) => (
+                   <span key={si} style={{ background: '#F0F9FF', color: '#0369A1', padding: '4px 10px', borderRadius: 6, fontSize: 10, fontWeight: 700, border: '1px solid #BAE6FD' }}>
+                     {std}
+                   </span>
+                 ))}
+               </div>
+               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                 <thead>
+                   <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                     <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8 }}>Quality Metric</th>
+                     <th style={{ padding: '10px 12px' }}>Target Threshold</th>
+                     <th style={{ padding: '10px 12px', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Measurement Method</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {(s.compiled_data?.metrics || []).map((m, i) => (
+                     <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                       <td style={{ padding: '10px 12px', fontWeight: 700 }}>{m.metric}</td>
+                       <td style={{ padding: '10px 12px' }}>{m.target}</td>
+                       <td style={{ padding: '10px 12px' }}>{m.measurement}</td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+          ) : s.section_key === 'dependencies' ? (
+             <div>
+               <div style={{ fontSize: 12, fontWeight: 700, color: '#5929d0', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Internal Project Dependencies</div>
+               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginBottom: 24 }}>
+                 <thead>
+                   <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                     <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8 }}>Dependency Name</th>
+                     <th style={{ padding: '10px 12px' }}>Linked Task</th>
+                     <th style={{ padding: '10px 12px' }}>Owner</th>
+                     <th style={{ padding: '10px 12px', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Status</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {(s.compiled_data?.internal || []).map((d, i) => (
+                     <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                       <td style={{ padding: '10px 12px', fontWeight: 600 }}>{d.name}</td>
+                       <td style={{ padding: '10px 12px', color: '#5929d0' }}>{d.linked_task || '—'}</td>
+                       <td style={{ padding: '10px 12px' }}>{d.owner}</td>
+                       <td style={{ padding: '10px 12px' }}>
+                          <span style={{ fontSize: 9, fontWeight: 700, color: d.status === 'confirmed' ? '#16A34A' : '#D97706' }}>
+                            {d.status?.toUpperCase()}
+                          </span>
+                       </td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+               <div style={{ fontSize: 12, fontWeight: 700, color: '#06B6D4', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>External & Client Dependencies</div>
+               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                 <thead>
+                   <tr style={{ background: '#F1F5F9', textAlign: 'left' }}>
+                     <th style={{ padding: '10px 12px', borderTopLeftRadius: 8, borderBottomLeftRadius: 8 }}>Dependency Name</th>
+                     <th style={{ padding: '10px 12px' }}>Linked Task</th>
+                     <th style={{ padding: '10px 12px' }}>Owner</th>
+                     <th style={{ padding: '10px 12px', borderTopRightRadius: 8, borderBottomRightRadius: 8 }}>Status</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {(s.compiled_data?.external || []).map((d, i) => (
+                     <tr key={i} style={{ borderBottom: '1px solid #E2E8F0' }}>
+                       <td style={{ padding: '10px 12px', fontWeight: 600 }}>{d.name}</td>
+                       <td style={{ padding: '10px 12px', color: '#06B6D4' }}>{d.linked_task || '—'}</td>
+                       <td style={{ padding: '10px 12px' }}>{d.owner}</td>
+                       <td style={{ padding: '10px 12px' }}>
+                          <span style={{ fontSize: 9, fontWeight: 700, color: d.status === 'confirmed' ? '#16A34A' : '#D97706' }}>
+                            {d.status?.toUpperCase()}
+                          </span>
+                       </td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>           ) : (
+            <div style={{ fontSize: 11, background: '#F8FAFC', padding: 20, borderRadius: 12, whiteSpace: 'pre-wrap', border: '1px solid #E2E8F0', color: '#475569' }}>
+               {JSON.stringify(s.compiled_data, null, 2)}
+            </div>
+          )}
+        </div>
+      ))}
+      </div>
+
+      {/* --- FOOTER --- */}
+      <div style={{ marginTop: 60, borderTop: '1px solid #E2E8F0', paddingTop: 20, textAlign: 'center' }}>
+        <div style={{ fontSize: 10, color: '#94A3B8', letterSpacing: '0.05em' }}>
+          CONFIDENTIAL · GENERATED BY CENTIFIC BID MANAGEMENT SYSTEM · © {new Date().getFullYear()}
+        </div>
+      </div>
+    </div>
+  );
 }
